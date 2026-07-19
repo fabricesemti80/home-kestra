@@ -10,10 +10,10 @@ triggers:
 tasks:
   - id: sync_flows
     type: io.kestra.plugin.git.SyncFlows
-    url: "{{ envs.KESTRA_FLOW_GIT_URL }}"
-    branch: "{{ envs.KESTRA_FLOW_GIT_BRANCH }}"
-    gitDirectory: "{{ envs.KESTRA_FLOW_GIT_PATH }}"
-    targetNamespace: "{{ envs.KESTRA_FLOW_NAMESPACE }}"
+    url: https://github.com/fabricesemti80/home-kestra.git
+    branch: main
+    gitDirectory: flows
+    targetNamespace: homelab.ops
     includeChildNamespaces: true
     delete: false
     dryRun: false
