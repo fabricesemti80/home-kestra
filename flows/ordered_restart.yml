@@ -1,0 +1,47 @@
+id: ordered_restart
+namespace: homelab.ops
+description: Ordered homelab restart after recabling.
+
+inputs:
+  - id: dry_run
+    type: BOOLEAN
+    defaults: true
+  - id: wait_minutes
+    type: INT
+    defaults: 20
+
+tasks:
+  - id: wait_for_proxmox_hosts
+    type: io.kestra.plugin.scripts.shell.Commands
+    taskRunner:
+      type: io.kestra.plugin.core.runner.Process
+    commands:
+      - bash /opt/kestra/homelab/scripts/ordered-restart.sh "{{ inputs.dry_run }}" "{{ inputs.wait_minutes }}" wait_hosts
+
+  - id: wait_for_ceph_health
+    type: io.kestra.plugin.scripts.shell.Commands
+    taskRunner:
+      type: io.kestra.plugin.core.runner.Process
+    commands:
+      - bash /opt/kestra/homelab/scripts/ordered-restart.sh "{{ inputs.dry_run }}" "{{ inputs.wait_minutes }}" wait_ceph
+
+  - id: clear_ceph_maintenance
+    type: io.kestra.plugin.scripts.shell.Commands
+    taskRunner:
+      type: io.kestra.plugin.core.runner.Process
+    commands:
+      - bash /opt/kestra/homelab/scripts/ordered-restart.sh "{{ inputs.dry_run }}" "{{ inputs.wait_minutes }}" clear_ceph_maintenance
+
+  - id: start_service_guests
+    type: io.kestra.plugin.scripts.shell.Commands
+    taskRunner:
+      type: io.kestra.plugin.core.runner.Process
+    commands:
+      - bash /opt/kestra/homelab/scripts/ordered-restart.sh "{{ inputs.dry_run }}" "{{ inputs.wait_minutes }}" start_services
+
+  - id: start_kubernetes_vms
+    type: io.kestra.plugin.scripts.shell.Commands
+    taskRunner:
+      type: io.kestra.plugin.core.runner.Process
+    commands:
+      - bash /opt/kestra/homelab/scripts/ordered-restart.sh "{{ inputs.dry_run }}" "{{ inputs.wait_minutes }}" start_k8s

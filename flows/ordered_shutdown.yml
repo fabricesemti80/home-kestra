@@ -1,0 +1,47 @@
+id: ordered_shutdown
+namespace: homelab.ops
+description: Ordered homelab shutdown for recabling.
+
+inputs:
+  - id: dry_run
+    type: BOOLEAN
+    defaults: true
+  - id: require_ceph_healthy
+    type: BOOLEAN
+    defaults: true
+
+tasks:
+  - id: preflight
+    type: io.kestra.plugin.scripts.shell.Commands
+    taskRunner:
+      type: io.kestra.plugin.core.runner.Process
+    commands:
+      - bash /opt/kestra/homelab/scripts/ordered-shutdown.sh "{{ inputs.dry_run }}" "{{ inputs.require_ceph_healthy }}" preflight
+
+  - id: stop_kubernetes_vms
+    type: io.kestra.plugin.scripts.shell.Commands
+    taskRunner:
+      type: io.kestra.plugin.core.runner.Process
+    commands:
+      - bash /opt/kestra/homelab/scripts/ordered-shutdown.sh "{{ inputs.dry_run }}" "{{ inputs.require_ceph_healthy }}" stop_k8s
+
+  - id: stop_service_guests
+    type: io.kestra.plugin.scripts.shell.Commands
+    taskRunner:
+      type: io.kestra.plugin.core.runner.Process
+    commands:
+      - bash /opt/kestra/homelab/scripts/ordered-shutdown.sh "{{ inputs.dry_run }}" "{{ inputs.require_ceph_healthy }}" stop_services
+
+  - id: set_ceph_maintenance
+    type: io.kestra.plugin.scripts.shell.Commands
+    taskRunner:
+      type: io.kestra.plugin.core.runner.Process
+    commands:
+      - bash /opt/kestra/homelab/scripts/ordered-shutdown.sh "{{ inputs.dry_run }}" "{{ inputs.require_ceph_healthy }}" set_ceph_maintenance
+
+  - id: poweroff_proxmox_hosts
+    type: io.kestra.plugin.scripts.shell.Commands
+    taskRunner:
+      type: io.kestra.plugin.core.runner.Process
+    commands:
+      - bash /opt/kestra/homelab/scripts/ordered-shutdown.sh "{{ inputs.dry_run }}" "{{ inputs.require_ceph_healthy }}" poweroff_hosts
