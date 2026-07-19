@@ -1,0 +1,19 @@
+id: sync_flows_from_github
+namespace: homelab.ops
+description: Import Kestra flows from the home-kestra GitHub repository.
+
+triggers:
+  - id: every_15_minutes
+    type: io.kestra.plugin.core.trigger.Schedule
+    cron: "*/15 * * * *"
+
+tasks:
+  - id: sync_flows
+    type: io.kestra.plugin.git.SyncFlows
+    url: "{{ envs.KESTRA_FLOW_GIT_URL }}"
+    branch: "{{ envs.KESTRA_FLOW_GIT_BRANCH }}"
+    gitDirectory: "{{ envs.KESTRA_FLOW_GIT_PATH }}"
+    targetNamespace: "{{ envs.KESTRA_FLOW_NAMESPACE }}"
+    includeChildNamespaces: true
+    delete: false
+    dryRun: false
