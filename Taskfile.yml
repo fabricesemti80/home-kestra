@@ -1,0 +1,131 @@
+version: '3'
+
+# Load a gitignored .env if present (e.g. PULSE_AGENT_TOKEN).
+# Missing files are silently skipped, so this never breaks a fresh clone.
+dotenv: ['.env']
+
+vars:
+  ANSIBLE_CONFIG: ansible/ansible.cfg
+  INVENTORY: ansible/inventory/hosts.yml
+  PLAYBOOK: ansible/playbooks/install-pulse-agent.yml
+  ANSIBLE_ARGS: "-i {{.INVENTORY}} {{.PLAYBOOK}}"
+
+tasks:
+  ansible:plan:
+    desc: Run Ansible playbook in check mode (--check --diff)
+    dir: "{{.TASKFILE_DIR}}"
+    env:
+      ANSIBLE_CONFIG: "{{.ANSIBLE_CONFIG}}"
+    cmds:
+      - ansible-playbook --check --diff {{.ANSIBLE_ARGS}}
+
+  ansible:apply:
+    desc: Run Ansible playbook for real
+    dir: "{{.TASKFILE_DIR}}"
+    env:
+      ANSIBLE_CONFIG: "{{.ANSIBLE_CONFIG}}"
+    cmds:
+      - ansible-playbook {{.ANSIBLE_ARGS}}
+
+  ansible:plan:force:
+    desc: Force re-install in check mode (re-runs installer even if agent is running)
+    dir: "{{.TASKFILE_DIR}}"
+    env:
+      ANSIBLE_CONFIG: "{{.ANSIBLE_CONFIG}}"
+    cmds:
+      - ansible-playbook --check --diff -e pulse_agent_force=true {{.ANSIBLE_ARGS}}
+
+  ansible:apply:force:
+    desc: Force re-install for real (re-runs installer even if agent is running)
+    dir: "{{.TASKFILE_DIR}}"
+    env:
+      ANSIBLE_CONFIG: "{{.ANSIBLE_CONFIG}}"
+    cmds:
+      - ansible-playbook -e pulse_agent_force=true {{.ANSIBLE_ARGS}}
+
+  ansible:plan:host:
+    desc: Run Ansible playbook in check mode for a single host (HOST=proxmox-pve-0)
+    dir: "{{.TASKFILE_DIR}}"
+    env:
+      ANSIBLE_CONFIG: "{{.ANSIBLE_CONFIG}}"
+    vars:
+      HOST: "{{.HOST | default \"\"}}"
+    preconditions:
+      - sh: test -n "{{.HOST}}"
+        msg: "Set HOST, e.g. task ansible:plan:host HOST=proxmox-pve-0"
+    cmds:
+      - ansible-playbook --check --diff -i {{.INVENTORY}} -l {{.HOST}} {{.PLAYBOOK}}
+
+  ansible:apply:host:
+    desc: Run Ansible playbook for a single host (HOST=proxmox-pve-0)
+    dir: "{{.TASKFILE_DIR}}"
+    env:
+      ANSIBLE_CONFIG: "{{.ANSIBLE_CONFIG}}"
+    vars:
+      HOST: "{{.HOST | default \"\"}}"
+    preconditions:
+      - sh: test -n "{{.HOST}}"
+        msg: "Set HOST, e.g. task ansible:apply:host HOST=proxmox-pve-0"
+    cmds:
+      - ansible-playbook -i {{.INVENTORY}} -l {{.HOST}} {{.PLAYBOOK}}
+
+  ansible:ping:
+    desc: Test SSH connectivity to all hosts in the inventory
+    dir: "{{.TASKFILE_DIR}}"
+    env:
+      ANSIBLE_CONFIG: "{{.ANSIBLE_CONFIG}}"
+    cmds:
+      - ansible -i {{.INVENTORY}} all -m ping
+
+  ansible:ping:host:
+    desc: Test SSH connectivity to a single host (HOST=proxmox-pve-0)
+    dir: "{{.TASKFILE_DIR}}"
+    env:
+      ANSIBLE_CONFIG: "{{.ANSIBLE_CONFIG}}"
+    vars:
+      HOST: "{{.HOST | default \"\"}}"
+    preconditions:
+      - sh: test -n "{{.HOST}}"
+        msg: "Set HOST, e.g. task ansible:ping:host HOST=proxmox-pve-0"
+    cmds:
+      - ansible -i {{.INVENTORY}} {{.HOST}} -m ping
+
+  ansible:inventory:
+    desc: Show the inventory graph
+    dir: "{{.TASKFILE_DIR}}"
+    env:
+      ANSIBLE_CONFIG: "{{.ANSIBLE_CONFIG}}"
+    cmds:
+      - ansible-inventory -i {{.INVENTORY}} --graph
+
+  ansible:facts:
+    desc: Gather and display facts for all hosts (HOST=... for a single host)
+    dir: "{{.TASKFILE_DIR}}"
+    env:
+      ANSIBLE_CONFIG: "{{.ANSIBLE_CONFIG}}"
+    vars:
+      HOST: "{{.HOST | default \"all\"}}"
+    cmds:
+      - ansible -i {{.INVENTORY}} {{.HOST}} -m setup --tree /tmp/ansible-facts
+
+  ansible:status:
+    desc: Show Pulse agent service status on all hosts
+    dir: "{{.TASKFILE_DIR}}"
+    env:
+      ANSIBLE_CONFIG: "{{.ANSIBLE_CONFIG}}"
+    cmds:
+      - ansible -i {{.INVENTORY}} pulse_agents -m command -a "systemctl status pulse-agent --no-pager" -b
+    ignore_errors: true
+
+  ansible:lint:
+    desc: Lint all playbooks and roles with ansible-lint
+    dir: "{{.TASKFILE_DIR}}"
+    env:
+      ANSIBLE_CONFIG: "{{.ANSIBLE_CONFIG}}"
+    cmds:
+      - ansible-lint ansible/
+
+  default:
+    desc: List available tasks
+    cmds:
+      - task --list

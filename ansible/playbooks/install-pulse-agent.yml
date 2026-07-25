@@ -1,0 +1,25 @@
+---
+- name: Install Pulse agent on selected hosts
+  hosts: pulse_agents
+  become: true
+  gather_facts: true
+
+  vars:
+    # The bootstrap token is read from the environment so it never lives in
+    # the repo. Provide it via a gitignored .env (loaded by `task`), a .envrc
+    # (direnv), or an explicit shell export. See .env.example.
+    pulse_agent_token: "{{ lookup('env', 'PULSE_AGENT_TOKEN') }}"
+
+  pre_tasks:
+    - name: Verify the Pulse agent token is available
+      ansible.builtin.assert:
+        that:
+          - pulse_agent_token | length > 0
+        fail_msg: >-
+          PULSE_AGENT_TOKEN is not set. Put it in a gitignored .env file
+          (see .env.example), a .envrc (see .envrc.example), or export it
+          in your shell, e.g. PULSE_AGENT_TOKEN=... task ansible:apply
+        quiet: true
+
+  roles:
+    - role: pulse_agent

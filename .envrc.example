@@ -1,0 +1,4 @@
+# direnv example — copy to .envrc, fill in the token, then run `direnv allow`.
+# .envrc is gitignored. direnv exports the variable into your shell so both
+# `task ansible:apply` and direct `ansible-playbook` calls pick it up.
+export PULSE_AGENT_TOKEN=replace-me

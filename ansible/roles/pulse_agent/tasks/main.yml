@@ -1,0 +1,148 @@
+---
+- name: Ensure required packages are installed
+  ansible.builtin.package:
+    name: "{{ item }}"
+    state: present
+  loop:
+    - curl
+    - bash
+  become: true
+
+- name: Check if Pulse agent service exists and is running
+  ansible.builtin.systemd:
+    name: "{{ pulse_agent_service }}"
+    state: started
+  register: _pulse_agent_status
+  failed_when: false
+  changed_when: false
+  become: true
+
+# check_mode: false so detection works even during `task ansible:plan`.
+# grep -q on the systemd unit file: rc=0 means the URL is present.
+- name: Check if the running agent points to our Pulse instance
+  ansible.builtin.shell: >-
+    systemctl cat '{{ pulse_agent_service }}' 2>/dev/null
+    | grep -qF '{{ pulse_agent_url }}'
+  register: _pulse_agent_url_match
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  become: true
+
+- name: Determine whether the agent is current for our instance
+  ansible.builtin.set_fact:
+    _pulse_agent_current: >-
+      {{
+        _pulse_agent_status.status.ActiveState | default('unknown') == 'active'
+        and _pulse_agent_url_match.rc | default(1) == 0
+      }}
+
+- name: Show agent detection result
+  ansible.builtin.debug:
+    msg: >-
+      {{ inventory_hostname }}: active={{ _pulse_agent_status.status.ActiveState | default('unknown') }},
+      our instance={{ _pulse_agent_current }},
+      force={{ pulse_agent_force }},
+      will {{ 'INSTALL' if (pulse_agent_force or not _pulse_agent_current) else 'skip (already up-to-date)' }}.
+  changed_when: false
+
+- name: Install Pulse agent
+  when: pulse_agent_force or not _pulse_agent_current
+  block:
+    - name: Create temporary directory
+      ansible.builtin.tempfile:
+        state: directory
+        suffix: pulse-agent
+      register: _pulse_agent_tmp
+      check_mode: false
+
+    - name: Download Pulse agent install script
+      ansible.builtin.get_url:
+        url: "{{ pulse_agent_url }}/install.sh"
+        dest: "{{ _pulse_agent_tmp.path }}/install.sh"
+        mode: "0755"
+
+    - name: Write agent token to file
+      ansible.builtin.copy:
+        content: "{{ pulse_agent_token }}"
+        dest: "{{ _pulse_agent_tmp.path }}/token"
+        mode: "0600"
+      no_log: true
+
+    - name: Run preflight checks
+      block:
+        - name: Run preflight checks
+          ansible.builtin.command:
+            argv:
+              - bash
+              - "{{ _pulse_agent_tmp.path }}/install.sh"
+              - --url
+              - "{{ pulse_agent_url }}"
+              - --preflight-only
+              - --output
+              - json
+              - --non-interactive
+              - --insecure
+          register: _pulse_preflight
+          changed_when: false
+          become: true
+          when: not ansible_check_mode
+          no_log: true
+
+      rescue:
+        - name: Display preflight failure (token redacted)
+          ansible.builtin.fail:
+            msg: >-
+              Pulse agent preflight failed on {{ inventory_hostname }} (rc={{ _pulse_preflight.rc | default('?') }}).
+              Output (token redacted):
+              {{ (_pulse_preflight.stdout | default('') ~ '\n--- stderr ---\n' ~ _pulse_preflight.stderr | default(''))
+                 | regex_replace(pulse_agent_token | regex_escape, '***REDACTED***') }}
+          when: not ansible_check_mode
+
+    - name: Install Pulse agent
+      block:
+        - name: Run install script
+          ansible.builtin.shell: |
+            set -e
+            bash "{{ _pulse_agent_tmp.path }}/install.sh" \
+              --url "{{ pulse_agent_url }}" \
+              --token-file "{{ _pulse_agent_tmp.path }}/token" \
+              --non-interactive \
+              --insecure{{ ' --enable-commands' if pulse_agent_enable_commands else '' }}
+          register: _pulse_install
+          become: true
+          when:
+            - pulse_agent_token | length > 0
+            - not ansible_check_mode
+          no_log: true
+
+      rescue:
+        - name: Display install failure (token redacted)
+          ansible.builtin.fail:
+            msg: >-
+              Pulse agent install failed on {{ inventory_hostname }} (rc={{ _pulse_install.rc | default('?') }}).
+              Output (token redacted):
+              {{ (_pulse_install.stdout | default('') ~ '\n--- stderr ---\n' ~ _pulse_install.stderr | default(''))
+                 | regex_replace(pulse_agent_token | regex_escape, '***REDACTED***') }}
+          when:
+            - pulse_agent_token | length > 0
+            - not ansible_check_mode
+
+  always:
+    - name: Remove temporary directory
+      ansible.builtin.file:
+        path: "{{ _pulse_agent_tmp.path | default('') }}"
+        state: absent
+      when: _pulse_agent_tmp.path is defined
+      become: true
+      check_mode: false
+
+- name: Ensure Pulse agent service is enabled and running
+  ansible.builtin.systemd:
+    name: "{{ pulse_agent_service }}"
+    state: started
+    enabled: true
+  become: true
+  when:
+    - ansible_facts.service_mgr == 'systemd'
+    - not ansible_check_mode or _pulse_agent_status.status.ActiveState | default('') | length > 0

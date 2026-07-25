@@ -1,0 +1,11 @@
+# ── Secrets ──────────────────────────────────────────────────────────
+# Never commit real tokens. Use .env (loaded by `task`) or .envrc
+# (loaded by direnv). Copy from the *.example templates and fill in.
+.env
+.envrc
+
+# Defensive catch-alls for any other local secret files
+*.env.local
+.env.*.local
+ansible/**/secrets.yml
+ansible/**/secrets.vault

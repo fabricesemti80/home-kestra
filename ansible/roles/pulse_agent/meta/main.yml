@@ -1,0 +1,17 @@
+---
+galaxy_info:
+  author: home-kestra
+  description: Install Pulse monitoring agent
+  company: home
+  license: MIT
+  min_ansible_version: "2.9"
+  platforms:
+    - name: Debian
+    - name: Ubuntu
+    - name: EL
+  galaxy_tags:
+    - monitoring
+    - pulse
+    - agent
+
+dependencies: []
