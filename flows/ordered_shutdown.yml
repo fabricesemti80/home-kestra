@@ -13,35 +13,85 @@ inputs:
 tasks:
   - id: preflight
     type: io.kestra.plugin.scripts.shell.Commands
+    containerImage: alpine:3.20
+    beforeCommands:
+      - apk add --no-cache bash openssh-client
+    namespaceFiles:
+      enabled: true
+      include:
+        - ordered-shutdown.sh
     taskRunner:
-      type: io.kestra.plugin.core.runner.Process
+      type: io.kestra.plugin.scripts.runner.docker.Docker
+    env:
+      HOMELAB_SSH_PRIVATE_KEY: "{{ secret('HOMELAB_SSH_PRIVATE_KEY') }}"
+      HOMELAB_SSH_KNOWN_HOSTS: "{{ secret('HOMELAB_SSH_KNOWN_HOSTS') }}"
     commands:
-      - bash /opt/kestra/homelab/scripts/ordered-shutdown.sh "{{ inputs.dry_run }}" "{{ inputs.require_ceph_healthy }}" preflight
+      - bash ordered-shutdown.sh "{{ inputs.dry_run }}" "{{ inputs.require_ceph_healthy }}" preflight
 
   - id: stop_kubernetes_vms
     type: io.kestra.plugin.scripts.shell.Commands
+    containerImage: alpine:3.20
+    beforeCommands:
+      - apk add --no-cache bash openssh-client
+    namespaceFiles:
+      enabled: true
+      include:
+        - ordered-shutdown.sh
     taskRunner:
-      type: io.kestra.plugin.core.runner.Process
+      type: io.kestra.plugin.scripts.runner.docker.Docker
+    env:
+      HOMELAB_SSH_PRIVATE_KEY: "{{ secret('HOMELAB_SSH_PRIVATE_KEY') }}"
+      HOMELAB_SSH_KNOWN_HOSTS: "{{ secret('HOMELAB_SSH_KNOWN_HOSTS') }}"
     commands:
-      - bash /opt/kestra/homelab/scripts/ordered-shutdown.sh "{{ inputs.dry_run }}" "{{ inputs.require_ceph_healthy }}" stop_k8s
+      - bash ordered-shutdown.sh "{{ inputs.dry_run }}" "{{ inputs.require_ceph_healthy }}" stop_k8s
 
   - id: stop_service_guests
     type: io.kestra.plugin.scripts.shell.Commands
+    containerImage: alpine:3.20
+    beforeCommands:
+      - apk add --no-cache bash openssh-client
+    namespaceFiles:
+      enabled: true
+      include:
+        - ordered-shutdown.sh
     taskRunner:
-      type: io.kestra.plugin.core.runner.Process
+      type: io.kestra.plugin.scripts.runner.docker.Docker
+    env:
+      HOMELAB_SSH_PRIVATE_KEY: "{{ secret('HOMELAB_SSH_PRIVATE_KEY') }}"
+      HOMELAB_SSH_KNOWN_HOSTS: "{{ secret('HOMELAB_SSH_KNOWN_HOSTS') }}"
     commands:
-      - bash /opt/kestra/homelab/scripts/ordered-shutdown.sh "{{ inputs.dry_run }}" "{{ inputs.require_ceph_healthy }}" stop_services
+      - bash ordered-shutdown.sh "{{ inputs.dry_run }}" "{{ inputs.require_ceph_healthy }}" stop_services
 
   - id: set_ceph_maintenance
     type: io.kestra.plugin.scripts.shell.Commands
+    containerImage: alpine:3.20
+    beforeCommands:
+      - apk add --no-cache bash openssh-client
+    namespaceFiles:
+      enabled: true
+      include:
+        - ordered-shutdown.sh
     taskRunner:
-      type: io.kestra.plugin.core.runner.Process
+      type: io.kestra.plugin.scripts.runner.docker.Docker
+    env:
+      HOMELAB_SSH_PRIVATE_KEY: "{{ secret('HOMELAB_SSH_PRIVATE_KEY') }}"
+      HOMELAB_SSH_KNOWN_HOSTS: "{{ secret('HOMELAB_SSH_KNOWN_HOSTS') }}"
     commands:
-      - bash /opt/kestra/homelab/scripts/ordered-shutdown.sh "{{ inputs.dry_run }}" "{{ inputs.require_ceph_healthy }}" set_ceph_maintenance
+      - bash ordered-shutdown.sh "{{ inputs.dry_run }}" "{{ inputs.require_ceph_healthy }}" set_ceph_maintenance
 
   - id: poweroff_proxmox_hosts
     type: io.kestra.plugin.scripts.shell.Commands
+    containerImage: alpine:3.20
+    beforeCommands:
+      - apk add --no-cache bash openssh-client
+    namespaceFiles:
+      enabled: true
+      include:
+        - ordered-shutdown.sh
     taskRunner:
-      type: io.kestra.plugin.core.runner.Process
+      type: io.kestra.plugin.scripts.runner.docker.Docker
+    env:
+      HOMELAB_SSH_PRIVATE_KEY: "{{ secret('HOMELAB_SSH_PRIVATE_KEY') }}"
+      HOMELAB_SSH_KNOWN_HOSTS: "{{ secret('HOMELAB_SSH_KNOWN_HOSTS') }}"
     commands:
-      - bash /opt/kestra/homelab/scripts/ordered-shutdown.sh "{{ inputs.dry_run }}" "{{ inputs.require_ceph_healthy }}" poweroff_hosts
+      - bash ordered-shutdown.sh "{{ inputs.dry_run }}" "{{ inputs.require_ceph_healthy }}" poweroff_hosts

@@ -17,3 +17,12 @@ tasks:
     includeChildNamespaces: true
     delete: false
     dryRun: false
+
+  - id: sync_namespace_files
+    type: io.kestra.plugin.git.SyncNamespaceFiles
+    url: https://github.com/fabricesemti80/home-kestra.git
+    branch: main
+    gitDirectory: scripts
+    namespace: homelab.ops
+    delete: false
+    dryRun: false

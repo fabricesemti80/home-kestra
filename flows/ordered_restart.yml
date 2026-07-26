@@ -13,35 +13,85 @@ inputs:
 tasks:
   - id: wait_for_proxmox_hosts
     type: io.kestra.plugin.scripts.shell.Commands
+    containerImage: alpine:3.20
+    beforeCommands:
+      - apk add --no-cache bash openssh-client
+    namespaceFiles:
+      enabled: true
+      include:
+        - ordered-restart.sh
     taskRunner:
-      type: io.kestra.plugin.core.runner.Process
+      type: io.kestra.plugin.scripts.runner.docker.Docker
+    env:
+      HOMELAB_SSH_PRIVATE_KEY: "{{ secret('HOMELAB_SSH_PRIVATE_KEY') }}"
+      HOMELAB_SSH_KNOWN_HOSTS: "{{ secret('HOMELAB_SSH_KNOWN_HOSTS') }}"
     commands:
-      - bash /opt/kestra/homelab/scripts/ordered-restart.sh "{{ inputs.dry_run }}" "{{ inputs.wait_minutes }}" wait_hosts
+      - bash ordered-restart.sh "{{ inputs.dry_run }}" "{{ inputs.wait_minutes }}" wait_hosts
 
   - id: wait_for_ceph_health
     type: io.kestra.plugin.scripts.shell.Commands
+    containerImage: alpine:3.20
+    beforeCommands:
+      - apk add --no-cache bash openssh-client
+    namespaceFiles:
+      enabled: true
+      include:
+        - ordered-restart.sh
     taskRunner:
-      type: io.kestra.plugin.core.runner.Process
+      type: io.kestra.plugin.scripts.runner.docker.Docker
+    env:
+      HOMELAB_SSH_PRIVATE_KEY: "{{ secret('HOMELAB_SSH_PRIVATE_KEY') }}"
+      HOMELAB_SSH_KNOWN_HOSTS: "{{ secret('HOMELAB_SSH_KNOWN_HOSTS') }}"
     commands:
-      - bash /opt/kestra/homelab/scripts/ordered-restart.sh "{{ inputs.dry_run }}" "{{ inputs.wait_minutes }}" wait_ceph
+      - bash ordered-restart.sh "{{ inputs.dry_run }}" "{{ inputs.wait_minutes }}" wait_ceph
 
   - id: clear_ceph_maintenance
     type: io.kestra.plugin.scripts.shell.Commands
+    containerImage: alpine:3.20
+    beforeCommands:
+      - apk add --no-cache bash openssh-client
+    namespaceFiles:
+      enabled: true
+      include:
+        - ordered-restart.sh
     taskRunner:
-      type: io.kestra.plugin.core.runner.Process
+      type: io.kestra.plugin.scripts.runner.docker.Docker
+    env:
+      HOMELAB_SSH_PRIVATE_KEY: "{{ secret('HOMELAB_SSH_PRIVATE_KEY') }}"
+      HOMELAB_SSH_KNOWN_HOSTS: "{{ secret('HOMELAB_SSH_KNOWN_HOSTS') }}"
     commands:
-      - bash /opt/kestra/homelab/scripts/ordered-restart.sh "{{ inputs.dry_run }}" "{{ inputs.wait_minutes }}" clear_ceph_maintenance
+      - bash ordered-restart.sh "{{ inputs.dry_run }}" "{{ inputs.wait_minutes }}" clear_ceph_maintenance
 
   - id: start_service_guests
     type: io.kestra.plugin.scripts.shell.Commands
+    containerImage: alpine:3.20
+    beforeCommands:
+      - apk add --no-cache bash openssh-client
+    namespaceFiles:
+      enabled: true
+      include:
+        - ordered-restart.sh
     taskRunner:
-      type: io.kestra.plugin.core.runner.Process
+      type: io.kestra.plugin.scripts.runner.docker.Docker
+    env:
+      HOMELAB_SSH_PRIVATE_KEY: "{{ secret('HOMELAB_SSH_PRIVATE_KEY') }}"
+      HOMELAB_SSH_KNOWN_HOSTS: "{{ secret('HOMELAB_SSH_KNOWN_HOSTS') }}"
     commands:
-      - bash /opt/kestra/homelab/scripts/ordered-restart.sh "{{ inputs.dry_run }}" "{{ inputs.wait_minutes }}" start_services
+      - bash ordered-restart.sh "{{ inputs.dry_run }}" "{{ inputs.wait_minutes }}" start_services
 
   - id: start_kubernetes_vms
     type: io.kestra.plugin.scripts.shell.Commands
+    containerImage: alpine:3.20
+    beforeCommands:
+      - apk add --no-cache bash openssh-client
+    namespaceFiles:
+      enabled: true
+      include:
+        - ordered-restart.sh
     taskRunner:
-      type: io.kestra.plugin.core.runner.Process
+      type: io.kestra.plugin.scripts.runner.docker.Docker
+    env:
+      HOMELAB_SSH_PRIVATE_KEY: "{{ secret('HOMELAB_SSH_PRIVATE_KEY') }}"
+      HOMELAB_SSH_KNOWN_HOSTS: "{{ secret('HOMELAB_SSH_KNOWN_HOSTS') }}"
     commands:
-      - bash /opt/kestra/homelab/scripts/ordered-restart.sh "{{ inputs.dry_run }}" "{{ inputs.wait_minutes }}" start_k8s
+      - bash ordered-restart.sh "{{ inputs.dry_run }}" "{{ inputs.wait_minutes }}" start_k8s
