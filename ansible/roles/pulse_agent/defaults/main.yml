@@ -1,11 +1,15 @@
 ---
 # defaults file for pulse_agent
 pulse_agent_url: "http://pulse.krapulax.home"
-pulse_agent_enable_commands: true
 pulse_agent_binary: "/usr/local/bin/pulse-agent"
 pulse_agent_service: "pulse-agent"
 
+# Flags passed to the install script. Override per group/host as needed.
+# The install script auto-detects Proxmox and adds --enable-host --enable-proxmox.
+# For Docker hosts, set: ['--enable-docker', '--disable-host', '--enable-commands']
+pulse_agent_install_flags:
+  - --enable-commands
+
 # Force re-running the installer even if the agent service is already running
-# (e.g. to update an old install). Set via --extra-vars "pulse_agent_force=true"
-# or FORCE=true on the task command line.
+# and matches our instance + flags. Set via --extra-vars "pulse_agent_force=true".
 pulse_agent_force: false

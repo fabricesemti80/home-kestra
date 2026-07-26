@@ -18,30 +18,50 @@
   become: true
 
 # check_mode: false so detection works even during `task ansible:plan`.
-# grep -q on the systemd unit file: rc=0 means the URL is present.
-- name: Check if the running agent points to our Pulse instance
+# We check two things: (1) the URL matches our instance, and (2) every
+# flag in pulse_agent_install_flags is present in the service unit file.
+# If either check fails, the agent is stale and we reinstall.
+- name: Read the service unit file for detection
   ansible.builtin.shell: >-
-    systemctl cat '{{ pulse_agent_service }}' 2>/dev/null
-    | grep -qF '{{ pulse_agent_url }}'
-  register: _pulse_agent_url_match
+    systemctl cat '{{ pulse_agent_service }}' 2>/dev/null || true
+  register: _pulse_agent_unit
   changed_when: false
   failed_when: false
   check_mode: false
   become: true
 
-- name: Determine whether the agent is current for our instance
+- name: Determine whether the agent is current for our instance and flags
   ansible.builtin.set_fact:
     _pulse_agent_current: >-
       {{
         _pulse_agent_status.status.ActiveState | default('unknown') == 'active'
-        and _pulse_agent_url_match.rc | default(1) == 0
+        and (pulse_agent_url in (_pulse_agent_unit.stdout | default('')))
+        and pulse_agent_install_flags
+           | reject('in', (_pulse_agent_unit.stdout | default('')))
+           | length == 0
+        and not ('--disable-host' in (_pulse_agent_unit.stdout | default(''))
+                 or '--enable-host=false' in (_pulse_agent_unit.stdout | default('')))
+      }}
+    _pulse_missing_flags: >-
+      {{
+        pulse_agent_install_flags
+        | reject('in', (_pulse_agent_unit.stdout | default('')))
+        | list
+      }}
+    _pulse_has_host_disabled: >-
+      {{
+        '--disable-host' in (_pulse_agent_unit.stdout | default(''))
+        or '--enable-host=false' in (_pulse_agent_unit.stdout | default(''))
       }}
 
 - name: Show agent detection result
   ansible.builtin.debug:
     msg: >-
       {{ inventory_hostname }}: active={{ _pulse_agent_status.status.ActiveState | default('unknown') }},
-      our instance={{ _pulse_agent_current }},
+      url_match={{ pulse_agent_url in (_pulse_agent_unit.stdout | default('')) }},
+      flags={{ pulse_agent_install_flags | join(' ') }},
+      missing_flags={{ _pulse_missing_flags | join(' ') }},
+      host_disabled={{ _pulse_has_host_disabled }},
       force={{ pulse_agent_force }},
       will {{ 'INSTALL' if (pulse_agent_force or not _pulse_agent_current) else 'skip (already up-to-date)' }}.
   changed_when: false
@@ -108,7 +128,7 @@
               --url "{{ pulse_agent_url }}" \
               --token-file "{{ _pulse_agent_tmp.path }}/token" \
               --non-interactive \
-              --insecure{{ ' --enable-commands' if pulse_agent_enable_commands else '' }}
+              --insecure {{ pulse_agent_install_flags | join(' ') }}
           register: _pulse_install
           become: true
           when:
