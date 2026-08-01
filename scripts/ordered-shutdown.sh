@@ -8,7 +8,7 @@ STAGE="${3:-preflight}"
 SSH_USER="${HOMELAB_SSH_USER:-root}"
 NODES=("10.0.40.10:pve-0" "10.0.40.11:pve-1" "10.0.40.12:pve-2")
 APP_VM_IDS=(4090 4091 4092)
-SERVICE_VM_IDS=()
+SERVICE_VM_IDS=(3050 3051)
 
 log() { printf '[%s] %s\n' "$STAGE" "$*"; }
 is_dry_run() { [[ "$DRY_RUN" == "true" || "$DRY_RUN" == "1" || "$DRY_RUN" == "yes" ]]; }
@@ -121,7 +121,7 @@ stop_vms() {
 set_ceph_flags() {
   local host
   host="$(first_available_host)"
-  run_remote "$host" "ceph osd set noout && ceph osd set norecover && ceph osd set nobackfill && ceph osd set norebalance && ceph osd set pause"
+  run_remote "$host" "ceph osd set noout 2>&1 && ceph osd set norecover 2>&1 && ceph osd set nobackfill 2>&1 && ceph osd set norebalance 2>&1 && ceph osd set pause 2>&1"
 }
 
 poweroff_hosts() {
