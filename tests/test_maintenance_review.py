@@ -56,6 +56,20 @@ rbd: ceph-rbd
 
 
 class ControllerReviewTests(unittest.TestCase):
+    def test_local_beszel_timer_is_disabled_instead_of_masked(self):
+        timer = "beszel-agent-update.timer"
+        controller = maintenance.Controller(None)
+        controller.state = {
+            "original": {"hosts": {"pve-0": {"units": {
+                timer: {"enabled": "enabled", "active": "active"}}}}},
+            "masks": {"pve-0": []}, "disabled": {"pve-0": []}}
+        calls = []
+        controller.mutate = lambda label, host, *argv: calls.append(argv)
+        controller.mask("pve-0", timer)
+        self.assertEqual(controller.state["disabled"]["pve-0"], [timer])
+        self.assertEqual(calls, [("systemctl", "disable", timer),
+                                 ("systemctl", "stop", timer)])
+
     def test_reboot_stage_loads_journal_and_targets_only_requested_host(self):
         controller = maintenance.Controller(None)
         calls = []
@@ -136,7 +150,9 @@ class ControllerReviewTests(unittest.TestCase):
 
     def test_reboot_accepts_masked_unit_state(self):
         controller = maintenance.Controller(None, sleep=lambda _: None)
-        controller.state = {"masks": {"pve-0": ["cron.service"]}, "rebooted": []}
+        controller.state = {"masks": {"pve-0": ["cron.service"]},
+                            "disabled": {"pve-0": ["beszel-agent-update.timer"]},
+                            "rebooted": []}
         calls = []
         boot_ids = iter(["old", "new"])
 
@@ -147,7 +163,7 @@ class ControllerReviewTests(unittest.TestCase):
             if argv[0] == "hostname":
                 return host
             if argv[0] == "systemctl":
-                return "masked"
+                return "disabled" if argv[-1] == "beszel-agent-update.timer" else "masked"
             raise AssertionError(argv)
 
         controller.cmd = command
@@ -157,6 +173,8 @@ class ControllerReviewTests(unittest.TestCase):
         controller.journal = lambda *args: None
         controller.reboot("pve-0")
         self.assertIn(("systemctl", "show", "--property=UnitFileState", "--value", "cron.service"), calls)
+        self.assertIn(("systemctl", "show", "--property=UnitFileState", "--value",
+                       "beszel-agent-update.timer"), calls)
 
     def test_restore_before_install_checks_original_versions(self):
         controller = maintenance.Controller(None)
