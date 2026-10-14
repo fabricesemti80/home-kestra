@@ -33,7 +33,7 @@ ssh_cmd() {
     -o ConnectTimeout=10 \
     -o StrictHostKeyChecking=yes \
     -o UserKnownHostsFile="$SSH_DIR/known_hosts" \
-    "$SSH_USER@$host" "$@"
+    "$SSH_USER@$host" "if test -e /var/lib/homelab-ops/active; then echo 'maintenance operation active' >&2; exit 1; fi; $*"
 }
 
 run_remote() {
@@ -135,6 +135,7 @@ poweroff_hosts() {
 }
 
 setup_ssh
+for entry in "${NODES[@]}"; do ssh_cmd "${entry%%:*}" true; done
 
 case "$STAGE" in
   preflight)

@@ -7,14 +7,14 @@ from maintenance import Controller, Refused  # noqa: E402
 
 
 class CephClientGateTests(unittest.TestCase):
-    def controller(self, watchers):
+    def controller(self, watchers, pools='["rbd"]'):
         class Runner:
             def call(self, host, action, **data):
                 argv = data["argv"]
                 if argv[:4] == ["ceph", "osd", "pool", "ls"]:
-                    return '["rbd"]'
+                    return pools
                 if argv[:5] == ["ceph", "osd", "pool", "application", "get"]:
-                    return '{"rbd": {}}'
+                    return '{"mgr": {}}' if argv[5] == ".mgr" else '{"rbd": {}}'
                 if argv[:3] == ["rbd", "namespace", "list"]:
                     return "[]"
                 if argv[:2] == ["rbd", "ls"]:
@@ -33,6 +33,9 @@ class CephClientGateTests(unittest.TestCase):
 
     def test_accepts_no_rbd_clients(self):
         self.controller("[]").clients_absent()
+
+    def test_accepts_internal_manager_pool(self):
+        self.controller("[]", '[".mgr", "rbd"]').clients_absent()
 
 
 if __name__ == "__main__":

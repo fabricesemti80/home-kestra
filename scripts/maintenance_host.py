@@ -12,6 +12,7 @@ ROOT = Path("/var/lib/homelab-ops")
 ACTIVE = ROOT / "active"
 POLICY = Path("/usr/sbin/policy-rc.d")
 POLICY_BYTES = b"#!/bin/sh\n# homelab-ops maintenance\nexit 101\n"
+DAEMON_UNIT = re.compile(r"ceph-(?:mon|mgr|osd|mds)@[^.][^/]*\.service")
 
 
 def run(*args):
@@ -62,7 +63,7 @@ def units():
     for line in lines:
         name, state, *_ = line.split()
         if (name.endswith(".timer") or name in ("cron.service", "pve-guests.service")
-                or re.fullmatch(r"ceph-(?:mon|mgr|osd|mds)@[^.][^/]*\.service", name)):
+                or DAEMON_UNIT.fullmatch(name)):
             if "@" in name and name.split("@")[1] == ".service":
                 continue
             active = subprocess.run(["systemctl", "is-active", name],
@@ -72,8 +73,12 @@ def units():
     for line in run("systemctl", "list-units", "--all", "--plain", "--no-legend",
                     "--no-pager", "ceph-*.service").splitlines():
         name = line.split()[0]
-        if name not in result:
-            raise ValueError("Ceph instance missing from unit-file inventory: " + name)
+        if DAEMON_UNIT.fullmatch(name) and name not in result:
+            enabled = subprocess.run(["systemctl", "is-enabled", name],
+                                     text=True, capture_output=True, timeout=30).stdout.strip()
+            active = subprocess.run(["systemctl", "is-active", name],
+                                    text=True, capture_output=True, timeout=30).stdout.strip()
+            result[name] = {"enabled": enabled, "active": active}
     return result
 
 
@@ -106,7 +111,8 @@ def inventory():
             "os": os_release.get("ID"), "os_version": os_release.get("VERSION_ID"),
             "versions": versions, "guests": guests, "units": units(),
             "policy_exists": POLICY.exists() or POLICY.is_symlink(),
-            "mounts": js("findmnt", "--json", "-t", "ceph,fuse.ceph,rbd")
+            "mounts": js("findmnt", "--json", "-o", "TARGET,SOURCE,FSTYPE",
+                         "-t", "ceph,fuse.ceph,rbd")
             if subprocess.run(["findmnt", "-rn", "-t", "ceph,fuse.ceph,rbd"],
                               capture_output=True, timeout=30).returncode == 0 else {},
             "rbd_devices": js("rbd", "device", "list", "--format", "json"),
