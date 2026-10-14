@@ -13,6 +13,13 @@ import maintenance_host  # noqa: E402
 
 
 class InventoryTests(unittest.TestCase):
+    def test_inventory_comparison_ignores_collection_order_but_detects_changes(self):
+        original = {"guests": [{"id": 1}, {"id": 2}], "cluster": [{"name": "a"}]}
+        reordered = {"cluster": [{"name": "a"}], "guests": [{"id": 2}, {"id": 1}]}
+        changed = {"guests": [{"id": 1}, {"id": 3}], "cluster": [{"name": "a"}]}
+        self.assertEqual(maintenance.canonical(original), maintenance.canonical(reordered))
+        self.assertNotEqual(maintenance.canonical(original), maintenance.canonical(changed))
+
     def test_cephfs_storage_paths_ignore_other_storage_types(self):
         config = """dir: local
  path /var/lib/vz

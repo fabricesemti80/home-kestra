@@ -43,6 +43,15 @@ def digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
 
 
+def canonical(value):
+    if isinstance(value, dict):
+        return {key: canonical(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return sorted((canonical(item) for item in value),
+                      key=lambda item: json.dumps(item, sort_keys=True))
+    return value
+
+
 def guest_restore_order(guest):
     guest_id = guest["id"]
     return (0 if guest_id in PBS else 1 if guest_id in SERVICES
@@ -312,7 +321,8 @@ class Controller:
         current = {host: self.runner.call(host, "inventory") for host in HOSTS}
         for host in HOSTS:
             current[host]["active"] = False
-        require(current == self.state["original"]["hosts"],
+        # Proxmox returns inventory collections in an unstable order.
+        require(canonical(current) == canonical(self.state["original"]["hosts"]),
                 "inventory changed while acquiring lock")
         return True
 
