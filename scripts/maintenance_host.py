@@ -91,6 +91,17 @@ def units():
     return result
 
 
+def cephfs_paths(config):
+    paths = set()
+    storage_type = None
+    for line in config.splitlines():
+        if line and not line[0].isspace() and ":" in line:
+            storage_type = line.split(":", 1)[0]
+        elif storage_type == "cephfs" and line.strip().startswith("path "):
+            paths.add(line.split(None, 1)[1].strip())
+    return paths
+
+
 def inventory():
     locks_free()
     if run("dpkg", "--audit"):
@@ -124,6 +135,8 @@ def inventory():
                          "-t", "ceph,fuse.ceph,rbd")
             if subprocess.run(["findmnt", "-rn", "-t", "ceph,fuse.ceph,rbd"],
                               capture_output=True, timeout=30).returncode == 0 else {},
+            "cephfs_storage_paths": sorted(cephfs_paths(
+                Path("/etc/pve/storage.cfg").read_text())),
             "rbd_devices": js("rbd", "device", "list", "--format", "json"),
             "state_fstype": run("findmnt", "-n", "-o", "FSTYPE", "-T", "/var/lib"),
             "root": os.geteuid() == 0,

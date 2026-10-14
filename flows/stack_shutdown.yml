@@ -1,12 +1,6 @@
-<<<<<<<< HEAD:flows/recabling_shutdown.yml
-id: recabling_shutdown
-namespace: homelab.ops
-description: Stop selected app and service guests, set Ceph maintenance flags, and power off Proxmox hosts for recabling.
-========
 id: stack_shutdown
 namespace: homelab.ops
 description: Ordered full-stack shutdown. Stops app-cluster VMs, service VMs, and the PBS LXC, sets Ceph maintenance flags, then powers off all three Proxmox hosts. The infra-cluster (running Kestra) is not part of the stack and stays up. Dry-run by default.
->>>>>>>> 346c632 (feat: replace flows with stack_shutdown/startup/maintenance):flows/stack_shutdown.yml
 
 inputs:
   - id: dry_run

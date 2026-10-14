@@ -7,12 +7,12 @@ The `stack_maintenance` Kestra flow runs from the physical infra cluster. It tar
 1. Verify recent restorable host and guest backups outside this flow.
 2. Audit CephFS and RBD clients outside the three Proxmox hosts. The flow checks known local mounts, RBD watchers, and CephFS sessions, but the operator must confirm external clients are stopped.
 3. Run with `live=false`. Review `maintenance-state.json`, host inventory, package simulation, Ceph health, and any refusal. Resolve unknowns before retrying.
-4. Confirm that no `homelab.ops` shutdown/startup flow or other host maintenance is active. The maintenance controller installs persistent host locks for a live run.
+4. Retire the old `ordered_shutdown`, `ordered_restart`, `recabling_shutdown`, and `recabling_startup` flows before enabling live operations; Git sync does not delete them. The stack shutdown stages and post-power-on startup stages refuse to run while a maintenance lock exists on any host. Also confirm no other host maintenance is active. The maintenance controller installs persistent host locks for a live run.
 5. For the live run, set `live=true`, `confirmation=FULL OUTAGE pve-0 pve-1 pve-2`, `backup_checked=true`, and `external_ceph_clients_checked=true`.
 
 ## Sequence
 
-The controller snapshots host and guest state, downloads the simulated package set, stops all running guests gracefully without force stopping them, checks that Ceph clients are absent, stops Ceph daemon instances, installs pinned packages, and reboots hosts one at a time. It then restores Ceph monitor quorum and health, starts previously running service guests before app-cluster VMs, and restores original guest autostart and timer states. It does not power off the physical hosts.
+The controller snapshots host and guest state, downloads the simulated package set, stops all running guests gracefully without force stopping them, checks that Ceph clients are absent, stops Ceph daemon instances, installs pinned packages, and reboots hosts one at a time. It then restores Ceph monitor quorum and health, starts PBS, service VMs, other guests, and app-cluster VMs in that order, and restores original guest autostart and timer states. CephFS mounts are accepted only when their mount path is configured as PVE CephFS storage and their source lists this cluster's monitor IPs. It does not power off the physical hosts.
 
 Every mutating step is journaled in `/var/lib/homelab-ops/active/state.json` on each host. A failure leaves the locks and journal in place; stop and inspect rather than rerunning maintenance. Package transactions and uncertainty about client access require operator reconciliation.
 

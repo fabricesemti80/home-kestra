@@ -92,6 +92,18 @@ check_hosts() {
   done
 }
 
+check_no_maintenance_lock() {
+  local entry host name
+  for entry in "${NODES[@]}"; do
+    host="${entry%%:*}"
+    name="${entry##*:}"
+    if ! ssh_cmd "$host" "test ! -e /var/lib/homelab-ops/active"; then
+      echo "maintenance lock is active on $name; refusing stack shutdown" >&2
+      return 1
+    fi
+  done
+}
+
 check_ceph_health() {
   local host health
   host="$(first_available_host)"
@@ -130,7 +142,17 @@ stop_guests() {
     status="$(ssh_cmd "$host" "$tool status $id | awk '{print \$2}'")"
     log "guest $id ($kind) on $node is $status"
     [[ "$status" == "running" ]] || continue
-    run_remote "$host" "$tool shutdown $id --timeout 180 || $tool stop $id"
+    if ! run_remote "$host" "$tool shutdown $id --timeout 180"; then
+      echo "graceful shutdown failed for guest $id; refusing later shutdown stages" >&2
+      return 1
+    fi
+    if ! is_dry_run; then
+      status="$(ssh_cmd "$host" "$tool status $id | awk '{print \$2}'")"
+      [[ "$status" == "stopped" ]] || {
+        echo "guest $id did not stop; refusing later shutdown stages" >&2
+        return 1
+      }
+    fi
   done
 }
 
@@ -151,6 +173,8 @@ poweroff_hosts() {
 }
 
 setup_ssh
+
+check_no_maintenance_lock
 
 case "$STAGE" in
   preflight)

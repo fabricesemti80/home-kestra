@@ -106,6 +106,18 @@ wait_hosts() {
   exit 1
 }
 
+check_no_maintenance_lock() {
+  local entry host name
+  for entry in "${NODES[@]}"; do
+    host="${entry%%:*}"
+    name="${entry##*:}"
+    if ! ssh_cmd "$host" "test ! -e /var/lib/homelab-ops/active"; then
+      echo "maintenance lock is active on $name; refusing stack startup" >&2
+      return 1
+    fi
+  done
+}
+
 start_ceph_services() {
   local entry host name
   for entry in "${NODES[@]}"; do
@@ -172,23 +184,28 @@ case "$STAGE" in
     wait_hosts
     ;;
   wait_ceph)
+    check_no_maintenance_lock
     start_ceph_services
     clear_ceph_flags
     wait_ceph_ok
     ;;
   clear_ceph_maintenance)
+    check_no_maintenance_lock
     clear_ceph_flags
     wait_ceph_ok
     ;;
   start_infra)
+    check_no_maintenance_lock
     set_guest_onboot 1 "${INFRA_LXC_IDS[@]}"
     start_guests "${INFRA_LXC_IDS[@]}"
     ;;
   start_services)
+    check_no_maintenance_lock
     set_guest_onboot 1 "${SERVICE_VM_IDS[@]}"
     start_guests "${SERVICE_VM_IDS[@]}"
     ;;
   start_k8s)
+    check_no_maintenance_lock
     set_guest_onboot 1 "${APP_VM_IDS[@]}"
     start_guests "${APP_VM_IDS[@]}"
     ;;

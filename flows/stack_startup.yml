@@ -1,12 +1,6 @@
-<<<<<<<< HEAD:flows/recabling_startup.yml
-id: recabling_startup
-namespace: homelab.ops
-description: Restore Ceph and selected service and app guests after Proxmox hosts start following recabling.
-========
 id: stack_startup
 namespace: homelab.ops
 description: Ordered full-stack startup after manual Proxmox host power-on. Waits for all three hosts, starts Ceph and clears maintenance flags, then starts the PBS LXC, service VMs, and app-cluster VMs. Kubernetes readiness is not verified; check the app-cluster separately after the run. Dry-run by default.
->>>>>>>> 346c632 (feat: replace flows with stack_shutdown/startup/maintenance):flows/stack_startup.yml
 
 inputs:
   - id: dry_run

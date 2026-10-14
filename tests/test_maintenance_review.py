@@ -13,6 +13,17 @@ import maintenance_host  # noqa: E402
 
 
 class InventoryTests(unittest.TestCase):
+    def test_cephfs_storage_paths_ignore_other_storage_types(self):
+        config = """dir: local
+ path /var/lib/vz
+cephfs: ceph-store
+ path /mnt/pve/ceph-store
+ content backup
+rbd: ceph-rbd
+ pool vms
+"""
+        self.assertEqual(maintenance_host.cephfs_paths(config), {"/mnt/pve/ceph-store"})
+
     def test_auxiliary_ceph_unit_is_ignored_and_loaded_daemon_is_discovered(self):
         def command(*args):
             if args[1] == "list-unit-files":
@@ -31,6 +42,11 @@ class InventoryTests(unittest.TestCase):
 
 
 class ControllerReviewTests(unittest.TestCase):
+    def test_guest_restore_order_is_pbs_services_other_guests_then_kubernetes(self):
+        guests = [{"id": guest_id} for guest_id in (4090, 4016, 4052, 3050, 7000)]
+        self.assertEqual([g["id"] for g in sorted(guests, key=maintenance.guest_restore_order)],
+                         [4016, 3050, 4052, 7000, 4090])
+
     def test_failed_inspection_does_not_claim_recovery_is_needed(self):
         output = io.StringIO()
         with patch.object(sys, "argv", ["maintenance.py"]), patch.object(
@@ -62,7 +78,7 @@ class ControllerReviewTests(unittest.TestCase):
                 calls.append(argv)
                 return json.dumps(responses[tuple(argv[:2]) if argv[1] == "status" else tuple(argv[:-2])])
 
-        snapshots = {h: {"units": {f"ceph-mon@{h}.service": {},
+        snapshots = {h: {"mounts": {}, "units": {f"ceph-mon@{h}.service": {},
                                    f"ceph-mgr@{h}.service": {},
                                    f"ceph-osd@{i}.service": {}}}
                      for i, h in enumerate(maintenance.HOSTS)}

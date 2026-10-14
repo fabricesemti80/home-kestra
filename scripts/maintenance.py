@@ -17,7 +17,8 @@ import uuid
 HOSTS = {"pve-0": "10.0.40.10", "pve-1": "10.0.40.11", "pve-2": "10.0.40.12"}
 FIRST = "pve-0"
 APP = {4090, 4091, 4092}
-SERVICES = {3050, 3051}
+PBS = {4016}
+SERVICES = {3050, 3051, 4052}
 CONFIRM = "FULL OUTAGE pve-0 pve-1 pve-2"
 SUPPORTED = {(12, 8, 18), (12, 8, 19), (13, 9, 19)}
 UPGRADE = ["apt-get", "-s", "--no-remove", "--with-new-pkgs", "upgrade"]
@@ -40,6 +41,12 @@ def major(version):
 
 def digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
+
+
+def guest_restore_order(guest):
+    guest_id = guest["id"]
+    return (0 if guest_id in PBS else 1 if guest_id in SERVICES
+            else 3 if guest_id in APP else 2, guest_id)
 
 
 class SSH(AbstractContextManager):
@@ -146,11 +153,12 @@ class Controller:
             versions.add(version)
             self.quorum(host["cluster"])
             require(not host["ha"], "HA resources unsupported; no HA/watchdog manipulation")
-            # Ceph mounts are allowed only for PVE-managed storage under /mnt/pve.
+            # CephFS mounts must match a configured PVE CephFS storage path.
             for mount in host["mounts"].get("filesystems", []):
                 target = mount.get("target", "")
-                require(target.startswith("/mnt/pve/"),
-                        "host Ceph mount outside PVE storage paths: " + target)
+                require(mount.get("fstype") in {"ceph", "fuse.ceph"}
+                        and target in host["cephfs_storage_paths"],
+                        "host Ceph mount is not configured PVE CephFS storage: " + target)
             # RBD mappings are allowed only for the node's own running QEMU guests.
             guests = {g["id"]: g for g in host["guests"]}
             for device in host["rbd_devices"]:
@@ -209,6 +217,12 @@ class Controller:
             require(addresses, "monitor without addrvec: " + mon["name"])
             for a in addresses:
                 mon_ips.add(a["addr"].split(":")[0])
+        for host in snapshots.values():
+            for mount in host["mounts"].get("filesystems", []):
+                source_ips = set(re.findall(r"(?:\d{1,3}\.){3}\d{1,3}",
+                                            mount.get("source", "")))
+                require(source_ips and source_ips <= mon_ips,
+                        "Ceph mount source does not match this cluster's monitors")
         # Monitors may listen on a dedicated cluster network; require one /24 only.
         require(len({ip.rsplit(".", 1)[0] for ip in mon_ips}) == 1,
                 "monitors span multiple networks")
@@ -455,8 +469,7 @@ class Controller:
             self.mutate("clear-own-flag:" + flag, FIRST, "ceph", "osd", "unset", flag)
         self.wait("Ceph HEALTH_OK", lambda: self.js(
             FIRST, "ceph", "status", "--format", "json")["health"]["status"] == "HEALTH_OK")
-        for guest in sorted(self.guests(), key=lambda g: (
-                0 if g["id"] in SERVICES else 2 if g["id"] in APP else 1, g["id"])):
+        for guest in sorted(self.guests(), key=guest_restore_order):
             status = self.guest_status(guest)
             if guest["status"] == "running" and status == "stopped":
                 self.mutate("restore-running-guest", guest["node"], *self.guest_command(guest, "start"))
