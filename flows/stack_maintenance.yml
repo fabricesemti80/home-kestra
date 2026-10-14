@@ -1,6 +1,6 @@
 id: stack_maintenance
 namespace: homelab.ops
-description: Routine Proxmox host maintenance. Simulates and pins safe package upgrades (no removals, no major version changes), gracefully stops all guests, sets Ceph noout, upgrades packages, reboots each host with quorum/boot verification, then restores Ceph, guests, onboot flags, and schedulers. Keeps a journaled state on every host and supports a recovery mode after operator failure. The infra-cluster (running Kestra) is not part of the stack and stays up. Dry-run (inspection only) by default; a live run requires the exact confirmation phrase plus backup and external-client acknowledgements.
+description: Routine Proxmox host maintenance. Kestra shows each maintenance stage as a separate task. Simulates and pins safe package upgrades (no removals, no major version changes), gracefully stops all guests, sets Ceph noout, upgrades packages, reboots each host with quorum/boot verification, then restores Ceph, guests, onboot flags, and schedulers. Keeps a journaled state on every host and supports a recovery mode after operator failure. The infra-cluster (running Kestra) is not part of the stack and stays up. Dry-run (inspection only) by default; a live run requires the exact confirmation phrase plus backup and external-client acknowledgements.
 
 inputs:
   - id: live
@@ -25,8 +25,9 @@ inputs:
     description: Confirm Ceph clients outside this inventory (e.g. Kubernetes CSI) are stopped or acceptable to disrupt.
 
 tasks:
-  - id: maintain
+  - id: inspect_and_lock
     type: io.kestra.plugin.scripts.shell.Commands
+    runIf: "{{ not inputs.recovery }}"
     containerImage: python:3.12-alpine
     beforeCommands:
       - apk add --no-cache openssh-client
@@ -48,7 +49,224 @@ tasks:
     commands:
       - |
         args=""
-        if [ "{{ inputs.live }}" = "true" ]; then args="$args --live"; fi
-        if [ "{{ inputs.recovery }}" = "true" ]; then args="$args --mode recover"; fi
-        # Intentional word splitting: args is built from fixed booleans only.
-        python3 maintenance.py $args
+        if [ "{{ inputs.live }}" = "true" ]; then args="--live"; fi
+        python3 maintenance.py --stage inspect $args
+
+  - id: prepare_hosts_and_packages
+    type: io.kestra.plugin.scripts.shell.Commands
+    runIf: "{{ inputs.live and not inputs.recovery }}"
+    containerImage: python:3.12-alpine
+    beforeCommands:
+      - apk add --no-cache openssh-client
+    namespaceFiles:
+      enabled: true
+      include:
+        - maintenance.py
+        - maintenance_host.py
+    taskRunner:
+      type: io.kestra.plugin.scripts.runner.docker.Docker
+    env:
+      HOMELAB_SSH_PRIVATE_KEY: "{{ secret('HOMELAB_SSH_PRIVATE_KEY') }}"
+      HOMELAB_SSH_KNOWN_HOSTS: "{{ secret('HOMELAB_SSH_KNOWN_HOSTS') }}"
+      MAINTENANCE_CONFIRMATION: "{{ inputs.confirmation }}"
+      MAINTENANCE_BACKUP_ACK: "{{ inputs.backup_checked }}"
+      MAINTENANCE_CLIENT_AUDIT_ACK: "{{ inputs.external_ceph_clients_checked }}"
+    outputFiles:
+      - maintenance-state.json
+    commands:
+      - python3 maintenance.py --stage prepare --live
+
+  - id: stop_guests_and_verify_clients
+    type: io.kestra.plugin.scripts.shell.Commands
+    runIf: "{{ inputs.live and not inputs.recovery }}"
+    containerImage: python:3.12-alpine
+    beforeCommands:
+      - apk add --no-cache openssh-client
+    namespaceFiles:
+      enabled: true
+      include:
+        - maintenance.py
+        - maintenance_host.py
+    taskRunner:
+      type: io.kestra.plugin.scripts.runner.docker.Docker
+    env:
+      HOMELAB_SSH_PRIVATE_KEY: "{{ secret('HOMELAB_SSH_PRIVATE_KEY') }}"
+      HOMELAB_SSH_KNOWN_HOSTS: "{{ secret('HOMELAB_SSH_KNOWN_HOSTS') }}"
+      MAINTENANCE_CONFIRMATION: "{{ inputs.confirmation }}"
+      MAINTENANCE_BACKUP_ACK: "{{ inputs.backup_checked }}"
+      MAINTENANCE_CLIENT_AUDIT_ACK: "{{ inputs.external_ceph_clients_checked }}"
+    outputFiles:
+      - maintenance-state.json
+    commands:
+      - python3 maintenance.py --stage stop-guests --live
+
+  - id: stop_ceph_daemons
+    type: io.kestra.plugin.scripts.shell.Commands
+    runIf: "{{ inputs.live and not inputs.recovery }}"
+    containerImage: python:3.12-alpine
+    beforeCommands:
+      - apk add --no-cache openssh-client
+    namespaceFiles:
+      enabled: true
+      include:
+        - maintenance.py
+        - maintenance_host.py
+    taskRunner:
+      type: io.kestra.plugin.scripts.runner.docker.Docker
+    env:
+      HOMELAB_SSH_PRIVATE_KEY: "{{ secret('HOMELAB_SSH_PRIVATE_KEY') }}"
+      HOMELAB_SSH_KNOWN_HOSTS: "{{ secret('HOMELAB_SSH_KNOWN_HOSTS') }}"
+      MAINTENANCE_CONFIRMATION: "{{ inputs.confirmation }}"
+      MAINTENANCE_BACKUP_ACK: "{{ inputs.backup_checked }}"
+      MAINTENANCE_CLIENT_AUDIT_ACK: "{{ inputs.external_ceph_clients_checked }}"
+    outputFiles:
+      - maintenance-state.json
+    commands:
+      - python3 maintenance.py --stage stop-ceph --live
+
+  - id: install_pinned_updates
+    type: io.kestra.plugin.scripts.shell.Commands
+    runIf: "{{ inputs.live and not inputs.recovery }}"
+    containerImage: python:3.12-alpine
+    beforeCommands:
+      - apk add --no-cache openssh-client
+    namespaceFiles:
+      enabled: true
+      include:
+        - maintenance.py
+        - maintenance_host.py
+    taskRunner:
+      type: io.kestra.plugin.scripts.runner.docker.Docker
+    env:
+      HOMELAB_SSH_PRIVATE_KEY: "{{ secret('HOMELAB_SSH_PRIVATE_KEY') }}"
+      HOMELAB_SSH_KNOWN_HOSTS: "{{ secret('HOMELAB_SSH_KNOWN_HOSTS') }}"
+      MAINTENANCE_CONFIRMATION: "{{ inputs.confirmation }}"
+      MAINTENANCE_BACKUP_ACK: "{{ inputs.backup_checked }}"
+      MAINTENANCE_CLIENT_AUDIT_ACK: "{{ inputs.external_ceph_clients_checked }}"
+    outputFiles:
+      - maintenance-state.json
+    commands:
+      - python3 maintenance.py --stage install --live
+
+  - id: reboot_pve_0
+    type: io.kestra.plugin.scripts.shell.Commands
+    runIf: "{{ inputs.live and not inputs.recovery }}"
+    containerImage: python:3.12-alpine
+    beforeCommands:
+      - apk add --no-cache openssh-client
+    namespaceFiles:
+      enabled: true
+      include:
+        - maintenance.py
+        - maintenance_host.py
+    taskRunner:
+      type: io.kestra.plugin.scripts.runner.docker.Docker
+    env:
+      HOMELAB_SSH_PRIVATE_KEY: "{{ secret('HOMELAB_SSH_PRIVATE_KEY') }}"
+      HOMELAB_SSH_KNOWN_HOSTS: "{{ secret('HOMELAB_SSH_KNOWN_HOSTS') }}"
+      MAINTENANCE_CONFIRMATION: "{{ inputs.confirmation }}"
+      MAINTENANCE_BACKUP_ACK: "{{ inputs.backup_checked }}"
+      MAINTENANCE_CLIENT_AUDIT_ACK: "{{ inputs.external_ceph_clients_checked }}"
+    outputFiles:
+      - maintenance-state.json
+    commands:
+      - python3 maintenance.py --stage reboot --host pve-0 --live
+
+  - id: reboot_pve_1
+    type: io.kestra.plugin.scripts.shell.Commands
+    runIf: "{{ inputs.live and not inputs.recovery }}"
+    containerImage: python:3.12-alpine
+    beforeCommands:
+      - apk add --no-cache openssh-client
+    namespaceFiles:
+      enabled: true
+      include:
+        - maintenance.py
+        - maintenance_host.py
+    taskRunner:
+      type: io.kestra.plugin.scripts.runner.docker.Docker
+    env:
+      HOMELAB_SSH_PRIVATE_KEY: "{{ secret('HOMELAB_SSH_PRIVATE_KEY') }}"
+      HOMELAB_SSH_KNOWN_HOSTS: "{{ secret('HOMELAB_SSH_KNOWN_HOSTS') }}"
+      MAINTENANCE_CONFIRMATION: "{{ inputs.confirmation }}"
+      MAINTENANCE_BACKUP_ACK: "{{ inputs.backup_checked }}"
+      MAINTENANCE_CLIENT_AUDIT_ACK: "{{ inputs.external_ceph_clients_checked }}"
+    outputFiles:
+      - maintenance-state.json
+    commands:
+      - python3 maintenance.py --stage reboot --host pve-1 --live
+
+  - id: reboot_pve_2
+    type: io.kestra.plugin.scripts.shell.Commands
+    runIf: "{{ inputs.live and not inputs.recovery }}"
+    containerImage: python:3.12-alpine
+    beforeCommands:
+      - apk add --no-cache openssh-client
+    namespaceFiles:
+      enabled: true
+      include:
+        - maintenance.py
+        - maintenance_host.py
+    taskRunner:
+      type: io.kestra.plugin.scripts.runner.docker.Docker
+    env:
+      HOMELAB_SSH_PRIVATE_KEY: "{{ secret('HOMELAB_SSH_PRIVATE_KEY') }}"
+      HOMELAB_SSH_KNOWN_HOSTS: "{{ secret('HOMELAB_SSH_KNOWN_HOSTS') }}"
+      MAINTENANCE_CONFIRMATION: "{{ inputs.confirmation }}"
+      MAINTENANCE_BACKUP_ACK: "{{ inputs.backup_checked }}"
+      MAINTENANCE_CLIENT_AUDIT_ACK: "{{ inputs.external_ceph_clients_checked }}"
+    outputFiles:
+      - maintenance-state.json
+    commands:
+      - python3 maintenance.py --stage reboot --host pve-2 --live
+
+  - id: restore_ceph_guests_and_schedulers
+    type: io.kestra.plugin.scripts.shell.Commands
+    runIf: "{{ inputs.live and not inputs.recovery }}"
+    containerImage: python:3.12-alpine
+    beforeCommands:
+      - apk add --no-cache openssh-client
+    namespaceFiles:
+      enabled: true
+      include:
+        - maintenance.py
+        - maintenance_host.py
+    taskRunner:
+      type: io.kestra.plugin.scripts.runner.docker.Docker
+    env:
+      HOMELAB_SSH_PRIVATE_KEY: "{{ secret('HOMELAB_SSH_PRIVATE_KEY') }}"
+      HOMELAB_SSH_KNOWN_HOSTS: "{{ secret('HOMELAB_SSH_KNOWN_HOSTS') }}"
+      MAINTENANCE_CONFIRMATION: "{{ inputs.confirmation }}"
+      MAINTENANCE_BACKUP_ACK: "{{ inputs.backup_checked }}"
+      MAINTENANCE_CLIENT_AUDIT_ACK: "{{ inputs.external_ceph_clients_checked }}"
+    outputFiles:
+      - maintenance-state.json
+    commands:
+      - python3 maintenance.py --stage restore --live
+
+  - id: recover_interrupted_maintenance
+    type: io.kestra.plugin.scripts.shell.Commands
+    runIf: "{{ inputs.recovery }}"
+    containerImage: python:3.12-alpine
+    beforeCommands:
+      - apk add --no-cache openssh-client
+    namespaceFiles:
+      enabled: true
+      include:
+        - maintenance.py
+        - maintenance_host.py
+    taskRunner:
+      type: io.kestra.plugin.scripts.runner.docker.Docker
+    env:
+      HOMELAB_SSH_PRIVATE_KEY: "{{ secret('HOMELAB_SSH_PRIVATE_KEY') }}"
+      HOMELAB_SSH_KNOWN_HOSTS: "{{ secret('HOMELAB_SSH_KNOWN_HOSTS') }}"
+      MAINTENANCE_CONFIRMATION: "{{ inputs.confirmation }}"
+      MAINTENANCE_BACKUP_ACK: "{{ inputs.backup_checked }}"
+      MAINTENANCE_CLIENT_AUDIT_ACK: "{{ inputs.external_ceph_clients_checked }}"
+    outputFiles:
+      - maintenance-state.json
+    commands:
+      - |
+        args=""
+        if [ "{{ inputs.live }}" = "true" ]; then args="--live"; fi
+        python3 maintenance.py --stage recovery $args

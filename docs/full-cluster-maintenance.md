@@ -12,6 +12,8 @@ The `stack_maintenance` Kestra flow runs from the physical infra cluster. It tar
 
 ## Sequence
 
+Kestra displays the run as separate tasks: preflight and lock, host/package preparation, guest shutdown and client verification, Ceph shutdown, package installation, each host reboot, and service restoration. Host journals record the next allowed stage and refuse out-of-order or replayed tasks after an interrupted stage. A failed task identifies the stage that stopped; inspect its logs and the host journals before taking recovery action. All later live stages run only when `live=true` and `recovery=false`.
+
 The controller snapshots host and guest state, downloads the simulated package set, stops all running guests gracefully without force stopping them, checks that Ceph clients are absent, stops Ceph daemon instances, installs pinned packages, and reboots hosts one at a time. It then restores Ceph monitor quorum and health, starts PBS, service VMs, other guests, and app-cluster VMs in that order, and restores original guest autostart and timer states. CephFS mounts are accepted only when their mount path is configured as PVE CephFS storage and their source lists this cluster's monitor IPs. It does not power off the physical hosts.
 
 Every mutating step is journaled in `/var/lib/homelab-ops/active/state.json` on each host. A failure leaves the locks and journal in place; stop and inspect rather than rerunning maintenance. Package transactions and uncertainty about client access require operator reconciliation.

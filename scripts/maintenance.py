@@ -281,9 +281,149 @@ class Controller:
                       "phase": "planned", "pending": None, "original": original,
                       "original_digest": digest(original), "packages": packages,
                       "masks": {h: [] for h in HOSTS}, "policies": [],
-                      "rebooted": [], "flags_intended": [], "packages_touched": []}
+                      "rebooted": [], "flags_intended": [], "packages_touched": [],
+                      "next_stage": "prepare", "stage_in_progress": None}
         self.artifact()
         return snapshots
+
+    def load_state(self):
+        states = [self.runner.call(host, "load") for host in HOSTS]
+        require(all(state == states[0] for state in states),
+                "divergent journals; manual reconciliation required")
+        self.state = states[0]
+        require(self.state.get("schema") == 2 and
+                self.state.get("original_digest") == digest(self.state.get("original")),
+                "invalid maintenance journal")
+        require(re.fullmatch(r"[a-f0-9-]{36}", self.state.get("operation", "")),
+                "invalid maintenance operation ID")
+        self.artifact()
+
+    def begin(self, dry_run, confirmation, backup, audit):
+        self.preflight()
+        if dry_run:
+            print("Dry-run inspected all hosts; no host writes. Review maintenance-state.json.")
+            return False
+        self.require_live_ack(confirmation, backup, audit)
+        # Fixed host first closes races with legacy flows. Locks intentionally survive failures.
+        for host in HOSTS:
+            self.runner.call(host, "lock", operation=self.state["operation"])
+        self.runner.call(FIRST, "executor", operation=self.state["operation"])
+        self.journal("locked")
+        current = {host: self.runner.call(host, "inventory") for host in HOSTS}
+        for host in HOSTS:
+            current[host]["active"] = False
+        require(current == self.state["original"]["hosts"],
+                "inventory changed while acquiring lock")
+        return True
+
+    @staticmethod
+    def require_live_ack(confirmation, backup, audit):
+        require(confirmation == CONFIRM and backup and audit,
+                "live operation requires exact confirmation, backup and Ceph-client audit")
+
+    def prepare(self):
+        for host in HOSTS:
+            saved = self.state["original"]["hosts"][host]
+            for unit in saved["units"]:
+                if unit.endswith(".timer") or unit == "cron.service":
+                    self.mask(host, unit)
+            self.mask(host, "pve-guests.service", stop=False)
+            self.state["policies"].append(host)
+            self.change("policy-install", host, "policy_install")
+            self.mutate("refresh-packages", host, "apt-get", "update", "--error-on=any")
+            packages = self.packages(host, saved["versions"])
+            self.state["packages"][host] = packages
+            pins = [f"{package}={version}" for package, version in sorted(packages.items())]
+            if pins:
+                self.mutate("download-packages", host, "apt-get", "--assume-yes", "--no-remove",
+                            "--download-only", "install", *pins)
+        for guest in self.guests():
+            self.mutate("disable-onboot", guest["node"],
+                        *self.guest_command(guest, "set", "--onboot", "0"))
+
+    def stop_guests(self):
+        for guest in sorted(self.guests(), key=lambda item: (item["id"] not in APP, item["id"])):
+            if guest["status"] == "running":
+                self.mutate("graceful-shutdown", guest["node"],
+                            *self.guest_command(guest, "shutdown", "--timeout", "180"))
+                require(self.guest_status(guest) == "stopped", "graceful shutdown incomplete")
+        self.all_stopped()
+        self.clients_absent()
+
+    def stop_ceph(self):
+        for flag in self.state["original"]["ceph"]["added_flags"]:
+            self.state["flags_intended"].append(flag)
+            self.mutate("ceph-flag:" + flag, FIRST, "ceph", "osd", "set", flag)
+        for kind in ("mds", "osd", "mgr", "mon"):
+            for host, saved in self.state["original"]["hosts"].items():
+                for unit in saved["units"]:
+                    if unit.startswith("ceph-" + kind + "@"):
+                        self.mask(host, unit)
+
+    def install(self):
+        for host in HOSTS:
+            require(self.packages(host, self.state["original"]["hosts"][host]["versions"]) ==
+                    self.state["packages"][host], "simulated package manifest drift")
+            pins = [f"{package}={version}" for package, version in
+                    sorted(self.state["packages"][host].items())]
+            if pins:
+                self.state["packages_touched"].append(host)
+                self.journal("install-packages-intent:" + host)
+                self.mutate("install-packages", host, "env", "DEBIAN_FRONTEND=noninteractive",
+                            "NEEDRESTART_MODE=l", "apt-get", "--assume-yes", "--no-remove",
+                            "--no-download", "-o", "Dpkg::Options::=--force-confold",
+                            "install", *pins)
+            if host in self.state["packages_touched"]:
+                self.verify_packages(host)
+            else:
+                self.verify_original_packages(host)
+
+    def verify_original_packages(self, host):
+        require(not self.cmd(host, "dpkg", "--audit"), "dpkg needs manual repair")
+        for package, version in self.state["original"]["hosts"][host]["versions"].items():
+            require(self.cmd(host, "dpkg-query", "-W", "-f=${Version}", package) == version,
+                    "original package state changed before installation")
+
+    def run_stage(self, stage, dry_run=True, confirmation="", backup=False, audit=False,
+                  host=None):
+        if stage == "inspect":
+            if self.begin(dry_run, confirmation, backup, audit):
+                print("Preflight passed; maintenance locks acquired.")
+            return
+        if stage == "recovery":
+            self.recover(dry_run, confirmation, backup, audit)
+            return
+        if dry_run:
+            raise Refused("mutating stages require live=true")
+        self.require_live_ack(confirmation, backup, audit)
+        self.load_state()
+        stages = {"prepare": self.prepare, "stop-guests": self.stop_guests,
+                  "stop-ceph": self.stop_ceph, "install": self.install,
+                  "restore": self.restore}
+        if stage == "reboot":
+            require(host in HOSTS, "reboot stage requires an allowlisted host")
+            stage_key = "reboot:" + host
+            action = lambda: self.reboot(host)
+            next_stage = {"pve-0": "reboot:pve-1", "pve-1": "reboot:pve-2",
+                          "pve-2": "restore"}[host]
+        else:
+            require(stage in stages, "unknown maintenance stage")
+            stage_key = stage
+            action = stages[stage]
+            next_stage = {"prepare": "stop-guests", "stop-guests": "stop-ceph",
+                          "stop-ceph": "install", "install": "reboot:pve-0",
+                          "restore": "complete"}[stage]
+        require(self.state.get("stage_in_progress") is None,
+                "previous stage did not finish; use the recovery runbook")
+        require(self.state.get("next_stage") == stage_key,
+                "maintenance stages must run in order; use the recovery runbook")
+        self.state["stage_in_progress"] = stage_key
+        self.journal("stage-started:" + stage_key)
+        action()
+        if stage != "restore":
+            self.state["stage_in_progress"] = None
+            self.state["next_stage"] = next_stage
+            self.journal("stage-complete:" + stage_key)
 
     def guests(self):
         return [g for h in self.state["original"]["hosts"].values() for g in h["guests"]]
@@ -357,74 +497,12 @@ class Controller:
         self.journal("reboot-verified:" + host)
 
     def execute(self, dry_run=True, confirmation="", backup=False, audit=False):
-        self.preflight()
-        if dry_run:
-            print("Dry-run inspected all hosts; no host writes. Review maintenance-state.json.")
+        if not self.begin(dry_run, confirmation, backup, audit):
             return
-        require(confirmation == CONFIRM and backup and audit,
-                "live operation requires exact confirmation, backup and Ceph-client audit")
-        # Fixed host first closes races with legacy flows. Locks intentionally survive failures.
-        for host in HOSTS:
-            self.runner.call(host, "lock", operation=self.state["operation"])
-        self.runner.call(FIRST, "executor", operation=self.state["operation"])
-        self.journal("locked")
-        # Re-inventory after lock, before host settings change; detect the preflight/lock race.
-        current = {h: self.runner.call(h, "inventory") for h in HOSTS}
-        for host in HOSTS:
-            current[host]["active"] = False
-        require(current == self.state["original"]["hosts"], "inventory changed while acquiring lock")
-        for host in HOSTS:
-            saved = self.state["original"]["hosts"][host]
-            # Stop/mask all system timers and cron, including the known Sunday Ceph job.
-            for unit in saved["units"]:
-                if unit.endswith(".timer") or unit == "cron.service":
-                    self.mask(host, unit)
-            self.mask(host, "pve-guests.service", stop=False)
-            self.state["policies"].append(host)
-            self.change("policy-install", host, "policy_install")
-            self.mutate("refresh-packages", host, "apt-get", "update", "--error-on=any")
-            packages = self.packages(host, saved["versions"])
-            self.state["packages"][host] = packages
-            pins = [f"{p}={v}" for p, v in sorted(packages.items())]
-            if pins:
-                self.mutate("download-packages", host, "apt-get", "--assume-yes", "--no-remove",
-                            "--download-only", "install", *pins)
-        # Download/dependency failures abort here, before guest shutdown.
-        for guest in self.guests():
-            self.mutate("disable-onboot", guest["node"],
-                        *self.guest_command(guest, "set", "--onboot", "0"))
-        for guest in sorted(self.guests(), key=lambda g: (g["id"] not in APP, g["id"])):
-            if guest["status"] == "running":
-                self.mutate("graceful-shutdown", guest["node"],
-                            *self.guest_command(guest, "shutdown", "--timeout", "180"))
-                require(self.guest_status(guest) == "stopped", "graceful shutdown incomplete")
-        self.all_stopped()
-        self.clients_absent()
-        for flag in self.state["original"]["ceph"]["added_flags"]:
-            self.state["flags_intended"].append(flag)
-            self.mutate("ceph-flag:" + flag, FIRST, "ceph", "osd", "set", flag)
-        for kind in ("mds", "osd", "mgr", "mon"):
-            for host, saved in self.state["original"]["hosts"].items():
-                for unit in saved["units"]:
-                    if unit.startswith("ceph-" + kind + "@"):
-                        self.mask(host, unit)
-        for host in HOSTS:
-            require(self.packages(host, self.state["original"]["hosts"][host]["versions"]) ==
-                    self.state["packages"][host], "simulated package manifest drift")
-            pins = [f"{p}={v}" for p, v in sorted(self.state["packages"][host].items())]
-            if pins:
-                self.state["packages_touched"].append(host)
-                self.journal("install-packages-intent:" + host)
-                self.mutate("install-packages", host, "env", "DEBIAN_FRONTEND=noninteractive",
-                            "NEEDRESTART_MODE=l", "apt-get", "--assume-yes", "--no-remove",
-                            "--no-download", "-o", "Dpkg::Options::=--force-confold", "install", *pins)
-            if host in self.state["packages_touched"]:
-                self.verify_packages(host)
-            else:
-                require(not self.cmd(host, "dpkg", "--audit"), "dpkg needs manual repair")
-                for package, version in self.state["original"]["hosts"][host]["versions"].items():
-                    require(self.cmd(host, "dpkg-query", "-W", "-f=${Version}", package) == version,
-                            "original package state changed before installation")
+        self.prepare()
+        self.stop_guests()
+        self.stop_ceph()
+        self.install()
         for host in HOSTS:
             self.reboot(host)
         self.restore()
@@ -444,10 +522,7 @@ class Controller:
             if host in self.state["packages_touched"]:
                 self.verify_packages(host)
             else:
-                require(not self.cmd(host, "dpkg", "--audit"), "dpkg needs manual repair")
-                for package, version in self.state["original"]["hosts"][host]["versions"].items():
-                    require(self.cmd(host, "dpkg-query", "-W", "-f=${Version}", package) == version,
-                            "original package state changed before installation")
+                self.verify_original_packages(host)
         # Only recorded units are touched, only our masks removed. Original enabled bits untouched.
         for kind in ("mon", "mgr", "osd", "mds"):
             for host, saved in self.state["original"]["hosts"].items():
@@ -522,6 +597,9 @@ class Controller:
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mode", choices=("maintain", "recover"), default="maintain")
+    parser.add_argument("--stage", choices=("inspect", "prepare", "stop-guests", "stop-ceph",
+                                             "install", "reboot", "restore", "recovery"))
+    parser.add_argument("--host", choices=tuple(HOSTS))
     parser.add_argument("--live", action="store_true")
     args = parser.parse_args()
     dry_run = not (args.live or os.environ.get("MAINTENANCE_LIVE", "").lower() == "true")
@@ -533,7 +611,9 @@ def main():
                        "confirmation": os.environ.get("MAINTENANCE_CONFIRMATION", ""),
                        "backup": os.environ.get("MAINTENANCE_BACKUP_ACK", "").lower() == "true",
                        "audit": os.environ.get("MAINTENANCE_CLIENT_AUDIT_ACK", "").lower() == "true"}
-            if args.mode == "recover" or os.environ.get("MAINTENANCE_RECOVERY", "").lower() == "true":
+            if args.stage:
+                controller.run_stage(args.stage, host=args.host, **options)
+            elif args.mode == "recover" or os.environ.get("MAINTENANCE_RECOVERY", "").lower() == "true":
                 controller.recover(**options)
             else:
                 controller.execute(**options)
