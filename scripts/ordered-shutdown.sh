@@ -114,7 +114,7 @@ stop_vms() {
     status="$(ssh_cmd "$host" "qm status $vmid | awk '{print \$2}'")"
     log "vm $vmid on $node is $status"
     [[ "$status" == "running" ]] || continue
-    run_remote "$host" "qm shutdown $vmid --timeout 180 || qm stop $vmid"
+    run_remote "$host" "qm shutdown $vmid --timeout 180 && test \"\$(qm status $vmid)\" = 'status: stopped'"
   done
 }
 

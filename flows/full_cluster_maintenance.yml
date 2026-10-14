@@ -1,0 +1,46 @@
+id: full_cluster_maintenance
+namespace: homelab.ops
+description: Inspect or perform a full Proxmox, Ceph, and app-cluster maintenance outage.
+
+inputs:
+  - id: live
+    type: BOOL
+    defaults: false
+  - id: recovery
+    type: BOOL
+    defaults: false
+  - id: confirmation
+    type: STRING
+    defaults: ""
+  - id: backup_checked
+    type: BOOL
+    defaults: false
+  - id: external_ceph_clients_checked
+    type: BOOL
+    defaults: false
+
+tasks:
+  - id: maintain
+    type: io.kestra.plugin.scripts.shell.Commands
+    containerImage: python:3.12-alpine
+    beforeCommands:
+      - apk add --no-cache openssh-client
+    namespaceFiles:
+      enabled: true
+      include:
+        - maintenance.py
+        - maintenance_host.py
+    taskRunner:
+      type: io.kestra.plugin.scripts.runner.docker.Docker
+    env:
+      HOMELAB_SSH_PRIVATE_KEY: "{{ secret('HOMELAB_SSH_PRIVATE_KEY') }}"
+      HOMELAB_SSH_KNOWN_HOSTS: "{{ secret('HOMELAB_SSH_KNOWN_HOSTS') }}"
+      MAINTENANCE_LIVE: "{{ inputs.live }}"
+      MAINTENANCE_RECOVERY: "{{ inputs.recovery }}"
+      MAINTENANCE_CONFIRMATION: "{{ inputs.confirmation }}"
+      MAINTENANCE_BACKUP_ACK: "{{ inputs.backup_checked }}"
+      MAINTENANCE_CLIENT_AUDIT_ACK: "{{ inputs.external_ceph_clients_checked }}"
+    commands:
+      - python3 maintenance.py
+    outputFiles:
+      - maintenance-state.json
