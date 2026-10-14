@@ -24,6 +24,10 @@ rbd: ceph-rbd
 """
         self.assertEqual(maintenance_host.cephfs_paths(config), {"/mnt/pve/ceph-store"})
 
+    def test_cephfs_storage_path_uses_proxmox_default_when_omitted(self):
+        config = "cephfs: cephfs-vm\n content images\n"
+        self.assertEqual(maintenance_host.cephfs_paths(config), {"/mnt/pve/cephfs-vm"})
+
     def test_auxiliary_ceph_unit_is_ignored_and_loaded_daemon_is_discovered(self):
         def command(*args):
             if args[1] == "list-unit-files":

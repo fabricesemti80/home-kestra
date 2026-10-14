@@ -94,11 +94,20 @@ def units():
 def cephfs_paths(config):
     paths = set()
     storage_type = None
+    storage_id = None
+    has_path = False
     for line in config.splitlines():
         if line and not line[0].isspace() and ":" in line:
-            storage_type = line.split(":", 1)[0]
+            if storage_type == "cephfs" and not has_path:
+                paths.add(f"/mnt/pve/{storage_id}")
+            storage_type, storage_id = line.split(":", 1)
+            storage_id = storage_id.strip()
+            has_path = False
         elif storage_type == "cephfs" and line.strip().startswith("path "):
-            paths.add(line.split(None, 1)[1].strip())
+            paths.add(line.split(None, 1)[1].strip().rstrip("/"))
+            has_path = True
+    if storage_type == "cephfs" and not has_path:
+        paths.add(f"/mnt/pve/{storage_id}")
     return paths
 
 
