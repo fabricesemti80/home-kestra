@@ -1,0 +1,48 @@
+id: stack_maintenance_recovery
+namespace: homelab.ops
+description: Recover an interrupted stack_maintenance operation from matching host journals. This flow restores recorded service and guest state without repeating package installs, shutdowns, or reboots.
+
+inputs:
+  - id: live
+    type: BOOL
+    defaults: false
+    description: Apply recovery changes. False = inspect the saved state only.
+  - id: confirmation
+    type: STRING
+    defaults: ""
+    description: Required for live recovery, exactly 'FULL OUTAGE pve-0 pve-1 pve-2'.
+  - id: backup_checked
+    type: BOOL
+    defaults: false
+    description: Confirm a current PBS backup exists for all affected guests.
+  - id: external_ceph_clients_checked
+    type: BOOL
+    defaults: false
+    description: Confirm Ceph clients outside this inventory (e.g. Kubernetes CSI) are stopped or acceptable to disrupt.
+
+tasks:
+  - id: recover_interrupted_maintenance
+    type: io.kestra.plugin.scripts.shell.Commands
+    containerImage: python:3.12-alpine
+    beforeCommands:
+      - apk add --no-cache openssh-client
+    namespaceFiles:
+      enabled: true
+      include:
+        - maintenance.py
+        - maintenance_host.py
+    taskRunner:
+      type: io.kestra.plugin.scripts.runner.docker.Docker
+    env:
+      HOMELAB_SSH_PRIVATE_KEY: "{{ secret('HOMELAB_SSH_PRIVATE_KEY') }}"
+      HOMELAB_SSH_KNOWN_HOSTS: "{{ secret('HOMELAB_SSH_KNOWN_HOSTS') }}"
+      MAINTENANCE_CONFIRMATION: "{{ inputs.confirmation }}"
+      MAINTENANCE_BACKUP_ACK: "{{ inputs.backup_checked }}"
+      MAINTENANCE_CLIENT_AUDIT_ACK: "{{ inputs.external_ceph_clients_checked }}"
+    outputFiles:
+      - maintenance-state.json
+    commands:
+      - |
+        args=""
+        if [ "{{ inputs.live }}" = "true" ]; then args="--live"; fi
+        python3 maintenance.py --stage recovery $args

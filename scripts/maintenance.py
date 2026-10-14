@@ -289,7 +289,8 @@ class Controller:
         self.state = {"schema": 2, "operation": str(uuid.uuid4()), "sequence": 0,
                       "phase": "planned", "pending": None, "original": original,
                       "original_digest": digest(original), "packages": packages,
-                      "masks": {h: [] for h in HOSTS}, "policies": [],
+                      "masks": {h: [] for h in HOSTS},
+                      "disabled": {h: [] for h in HOSTS}, "policies": [],
                       "rebooted": [], "flags_intended": [], "packages_touched": [],
                       "next_stage": "prepare", "stage_in_progress": None}
         self.artifact()
@@ -448,8 +449,13 @@ class Controller:
     def mask(self, host, unit, stop=True):
         original = self.state["original"]["hosts"][host]["units"][unit]
         if original["enabled"] != "masked":
-            self.state["masks"][host].append(unit)
-            self.mutate("mask:" + unit, host, "systemctl", "mask", unit)
+            if unit == "beszel-agent-update.timer" and original["enabled"] == "enabled":
+                # Its local unit file cannot be replaced by systemctl mask.
+                self.state["disabled"][host].append(unit)
+                self.mutate("disable:" + unit, host, "systemctl", "disable", unit)
+            else:
+                self.state["masks"][host].append(unit)
+                self.mutate("mask:" + unit, host, "systemctl", "mask", unit)
         if stop and original["active"] == "active":
             self.mutate("stop:" + unit, host, "systemctl", "stop", unit)
 
@@ -503,6 +509,10 @@ class Controller:
             require(self.cmd(host, "systemctl", "show", "--property=UnitFileState",
                              "--value", unit) == "masked",
                     "persistent mask lost after reboot")
+        for unit in self.state.get("disabled", {}).get(host, []):
+            require(self.cmd(host, "systemctl", "show", "--property=UnitFileState",
+                             "--value", unit) == "disabled",
+                    "persistent disable lost after reboot")
         self.state["rebooted"].append(host)
         self.journal("reboot-verified:" + host)
 
@@ -571,6 +581,8 @@ class Controller:
                     continue
                 if unit in self.state["masks"][host]:
                     self.mutate("restore-mask:" + unit, host, "systemctl", "unmask", unit)
+                if unit in self.state.get("disabled", {}).get(host, []):
+                    self.mutate("restore-disabled:" + unit, host, "systemctl", "enable", unit)
                 # pve-guests is a oneshot: never start it here (could start stopped guests).
                 if unit != "pve-guests.service" and original["active"] == "active":
                     self.mutate("restore-scheduler:" + unit, host, "systemctl", "start", unit)

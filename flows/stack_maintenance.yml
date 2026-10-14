@@ -1,16 +1,12 @@
 id: stack_maintenance
 namespace: homelab.ops
-description: Routine Proxmox host maintenance. Kestra shows each maintenance stage as a separate task. Simulates and pins safe package upgrades (no removals, no major version changes), gracefully stops all guests, sets Ceph noout, upgrades packages, reboots each host with quorum/boot verification, then restores Ceph, guests, onboot flags, and schedulers. Keeps a journaled state on every host and supports a recovery mode after operator failure. The infra-cluster (running Kestra) is not part of the stack and stays up. Dry-run (inspection only) by default; a live run requires the exact confirmation phrase plus backup and external-client acknowledgements.
+description: Routine Proxmox host maintenance. Kestra shows each maintenance stage as a separate task. Simulates and pins safe package upgrades (no removals, no major version changes), gracefully stops all guests, sets Ceph noout, upgrades packages, reboots each host with quorum/boot verification, then restores Ceph, guests, onboot flags, and schedulers. The infra-cluster (running Kestra) stays up. Dry-run (inspection only) by default; a live run requires the exact confirmation phrase plus backup and external-client acknowledgements. Interrupted maintenance recovery runs in stack_maintenance_recovery.
 
 inputs:
   - id: live
     type: BOOL
     defaults: false
     description: Perform the maintenance for real. False = read-only inspection.
-  - id: recovery
-    type: BOOL
-    defaults: false
-    description: Resume a previously interrupted operation from the host journals. Never repeats shutdown, package, or reboot steps.
   - id: confirmation
     type: STRING
     defaults: ""
@@ -27,7 +23,6 @@ inputs:
 tasks:
   - id: inspect_and_lock
     type: io.kestra.plugin.scripts.shell.Commands
-    runIf: "{{ not inputs.recovery }}"
     containerImage: python:3.12-alpine
     beforeCommands:
       - apk add --no-cache openssh-client
@@ -54,7 +49,7 @@ tasks:
 
   - id: prepare_hosts_and_packages
     type: io.kestra.plugin.scripts.shell.Commands
-    runIf: "{{ inputs.live and not inputs.recovery }}"
+    runIf: "{{ inputs.live }}"
     containerImage: python:3.12-alpine
     beforeCommands:
       - apk add --no-cache openssh-client
@@ -78,7 +73,7 @@ tasks:
 
   - id: stop_guests_and_verify_clients
     type: io.kestra.plugin.scripts.shell.Commands
-    runIf: "{{ inputs.live and not inputs.recovery }}"
+    runIf: "{{ inputs.live }}"
     containerImage: python:3.12-alpine
     beforeCommands:
       - apk add --no-cache openssh-client
@@ -102,7 +97,7 @@ tasks:
 
   - id: stop_ceph_daemons
     type: io.kestra.plugin.scripts.shell.Commands
-    runIf: "{{ inputs.live and not inputs.recovery }}"
+    runIf: "{{ inputs.live }}"
     containerImage: python:3.12-alpine
     beforeCommands:
       - apk add --no-cache openssh-client
@@ -126,7 +121,7 @@ tasks:
 
   - id: install_pinned_updates
     type: io.kestra.plugin.scripts.shell.Commands
-    runIf: "{{ inputs.live and not inputs.recovery }}"
+    runIf: "{{ inputs.live }}"
     containerImage: python:3.12-alpine
     beforeCommands:
       - apk add --no-cache openssh-client
@@ -150,7 +145,7 @@ tasks:
 
   - id: reboot_pve_0
     type: io.kestra.plugin.scripts.shell.Commands
-    runIf: "{{ inputs.live and not inputs.recovery }}"
+    runIf: "{{ inputs.live }}"
     containerImage: python:3.12-alpine
     beforeCommands:
       - apk add --no-cache openssh-client
@@ -174,7 +169,7 @@ tasks:
 
   - id: reboot_pve_1
     type: io.kestra.plugin.scripts.shell.Commands
-    runIf: "{{ inputs.live and not inputs.recovery }}"
+    runIf: "{{ inputs.live }}"
     containerImage: python:3.12-alpine
     beforeCommands:
       - apk add --no-cache openssh-client
@@ -198,7 +193,7 @@ tasks:
 
   - id: reboot_pve_2
     type: io.kestra.plugin.scripts.shell.Commands
-    runIf: "{{ inputs.live and not inputs.recovery }}"
+    runIf: "{{ inputs.live }}"
     containerImage: python:3.12-alpine
     beforeCommands:
       - apk add --no-cache openssh-client
@@ -222,7 +217,7 @@ tasks:
 
   - id: restore_ceph_guests_and_schedulers
     type: io.kestra.plugin.scripts.shell.Commands
-    runIf: "{{ inputs.live and not inputs.recovery }}"
+    runIf: "{{ inputs.live }}"
     containerImage: python:3.12-alpine
     beforeCommands:
       - apk add --no-cache openssh-client
@@ -243,30 +238,3 @@ tasks:
       - maintenance-state.json
     commands:
       - python3 maintenance.py --stage restore --live
-
-  - id: recover_interrupted_maintenance
-    type: io.kestra.plugin.scripts.shell.Commands
-    runIf: "{{ inputs.recovery }}"
-    containerImage: python:3.12-alpine
-    beforeCommands:
-      - apk add --no-cache openssh-client
-    namespaceFiles:
-      enabled: true
-      include:
-        - maintenance.py
-        - maintenance_host.py
-    taskRunner:
-      type: io.kestra.plugin.scripts.runner.docker.Docker
-    env:
-      HOMELAB_SSH_PRIVATE_KEY: "{{ secret('HOMELAB_SSH_PRIVATE_KEY') }}"
-      HOMELAB_SSH_KNOWN_HOSTS: "{{ secret('HOMELAB_SSH_KNOWN_HOSTS') }}"
-      MAINTENANCE_CONFIRMATION: "{{ inputs.confirmation }}"
-      MAINTENANCE_BACKUP_ACK: "{{ inputs.backup_checked }}"
-      MAINTENANCE_CLIENT_AUDIT_ACK: "{{ inputs.external_ceph_clients_checked }}"
-    outputFiles:
-      - maintenance-state.json
-    commands:
-      - |
-        args=""
-        if [ "{{ inputs.live }}" = "true" ]; then args="--live"; fi
-        python3 maintenance.py --stage recovery $args
