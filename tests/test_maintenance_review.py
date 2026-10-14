@@ -49,6 +49,41 @@ rbd: ceph-rbd
 
 
 class ControllerReviewTests(unittest.TestCase):
+    def test_reboot_stage_loads_journal_and_targets_only_requested_host(self):
+        controller = maintenance.Controller(None)
+        calls = []
+        def load_state():
+            calls.append("load")
+            controller.state = {"next_stage": "reboot:pve-1", "stage_in_progress": None}
+
+        controller.load_state = load_state
+        controller.journal = lambda phase: calls.append(phase)
+        controller.reboot = lambda host: calls.append(host)
+        controller.run_stage("reboot", dry_run=False, confirmation=maintenance.CONFIRM,
+                             backup=True, audit=True, host="pve-1")
+        self.assertEqual(calls, ["load", "stage-started:reboot:pve-1", "pve-1",
+                                 "stage-complete:reboot:pve-1"])
+
+    def test_interrupted_stage_cannot_be_replayed(self):
+        controller = maintenance.Controller(None)
+        controller.load_state = lambda: setattr(controller, "state", {
+            "next_stage": "prepare", "stage_in_progress": "prepare"})
+        with self.assertRaisesRegex(maintenance.Refused, "previous stage did not finish"):
+            controller.run_stage("prepare", dry_run=False, confirmation=maintenance.CONFIRM,
+                                 backup=True, audit=True)
+
+    def test_dry_run_inspect_does_not_acquire_locks(self):
+        calls = []
+
+        class Runner:
+            def call(self, *args, **kwargs):
+                calls.append(args)
+
+        controller = maintenance.Controller(Runner())
+        controller.preflight = lambda: setattr(controller, "state", {"planned": True})
+        controller.run_stage("inspect")
+        self.assertEqual(calls, [])
+
     def test_guest_restore_order_is_pbs_services_other_guests_then_kubernetes(self):
         guests = [{"id": guest_id} for guest_id in (4090, 4016, 4052, 3050, 7000)]
         self.assertEqual([g["id"] for g in sorted(guests, key=maintenance.guest_restore_order)],
