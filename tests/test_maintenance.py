@@ -21,10 +21,13 @@ class CephClientGateTests(unittest.TestCase):
                     return '["vm-disk"]'
                 if argv[:2] == ["rbd", "status"]:
                     return '{"watchers": ' + watchers + '}'
+                if argv[:2] == ["ceph", "tell"]:
+                    raise AssertionError("CephFS sessions are handled by the ordered daemon shutdown")
                 raise AssertionError(argv)
 
         controller = Controller(Runner())
-        controller.state = {"original": {"hosts": {"pve-0": {"units": {}}}}}
+        controller.state = {"original": {"hosts": {"pve-0": {"units": {
+            "ceph-mds@pve-0.service": {"active": "active"}}}}}}
         return controller
 
     def test_refuses_active_rbd_client(self):
@@ -33,6 +36,20 @@ class CephClientGateTests(unittest.TestCase):
 
     def test_accepts_no_rbd_clients(self):
         self.controller("[]").clients_absent()
+
+
+class CephMaintenanceFlagTests(unittest.TestCase):
+    def test_stop_sets_all_flags_missing_from_saved_original_state(self):
+        controller = Controller(None)
+        controller.state = {"original": {"ceph": {"flags": ["noout"]},
+                                           "hosts": {host: {"units": {}}
+                                                     for host in ("pve-0", "pve-1", "pve-2")}},
+                            "flags_intended": [], "masks": {"pve-0": [], "pve-1": [], "pve-2": []}}
+        calls = []
+        controller.mutate = lambda *args: calls.append(args)
+        controller.stop_ceph()
+        self.assertEqual([call[-1] for call in calls if call[0].startswith("ceph-flag:")],
+                         ["norecover", "nobackfill", "norebalance", "pause"])
 
 
 class GuestShutdownTests(unittest.TestCase):
