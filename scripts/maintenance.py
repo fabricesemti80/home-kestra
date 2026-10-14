@@ -20,6 +20,7 @@ APP = {4090, 4091, 4092}
 PBS = {4016}
 SERVICES = {3050, 3051, 4052}
 CONFIRM = "FULL OUTAGE pve-0 pve-1 pve-2"
+GUEST_SHUTDOWN_TIMEOUT = 480
 SUPPORTED = {(12, 8, 18), (12, 8, 19), (13, 9, 19)}
 UPGRADE = ["apt-get", "-s", "--no-remove", "--with-new-pkgs", "upgrade"]
 
@@ -354,10 +355,25 @@ class Controller:
 
     def stop_guests(self):
         for guest in sorted(self.guests(), key=lambda item: (item["id"] not in APP, item["id"])):
-            if guest["status"] == "running":
+            status = self.guest_status(guest)
+            if status == "stopped":
+                print(f"Guest {guest['id']} on {guest['node']} is already stopped.", flush=True)
+                continue
+            require(status == "running", f"guest {guest['id']} has unsupported status: {status}")
+            print(f"Requesting graceful shutdown of guest {guest['id']} on {guest['node']} "
+                  f"(timeout {GUEST_SHUTDOWN_TIMEOUT}s).", flush=True)
+            try:
                 self.mutate("graceful-shutdown", guest["node"],
-                            *self.guest_command(guest, "shutdown", "--timeout", "180"))
-                require(self.guest_status(guest) == "stopped", "graceful shutdown incomplete")
+                            *self.guest_command(guest, "shutdown", "--timeout",
+                                                str(GUEST_SHUTDOWN_TIMEOUT)))
+            except Refused:
+                if self.guest_status(guest) != "stopped":
+                    raise Refused(f"guest {guest['id']} on {guest['node']} did not shut down "
+                                  f"gracefully within {GUEST_SHUTDOWN_TIMEOUT}s; "
+                                  "maintenance stopped without force-stopping it") from None
+                print(f"Guest {guest['id']} stopped as the shutdown command timed out.", flush=True)
+            require(self.guest_status(guest) == "stopped",
+                    f"guest {guest['id']} did not stop; maintenance stopped without force-stopping it")
         self.all_stopped()
         self.clients_absent()
 
@@ -396,7 +412,7 @@ class Controller:
                     "original package state changed before installation")
 
     def run_stage(self, stage, dry_run=True, confirmation="", backup=False, audit=False,
-                  host=None):
+                  host=None, resume_stop_guests=False):
         if stage == "inspect":
             if self.begin(dry_run, confirmation, backup, audit):
                 print("Preflight passed; maintenance locks acquired.")
@@ -407,6 +423,8 @@ class Controller:
         if dry_run:
             raise Refused("mutating stages require live=true")
         self.require_live_ack(confirmation, backup, audit)
+        require(not resume_stop_guests or stage == "stop-guests",
+                "only the interrupted stop-guests stage can be resumed")
         self.load_state()
         stages = {"prepare": self.prepare, "stop-guests": self.stop_guests,
                   "stop-ceph": self.stop_ceph, "install": self.install,
@@ -424,10 +442,23 @@ class Controller:
             next_stage = {"prepare": "stop-guests", "stop-guests": "stop-ceph",
                           "stop-ceph": "install", "install": "reboot:pve-0",
                           "restore": "complete"}[stage]
-        require(self.state.get("stage_in_progress") is None,
-                "previous stage did not finish; use the recovery runbook")
-        require(self.state.get("next_stage") == stage_key,
-                "maintenance stages must run in order; use the recovery runbook")
+        if resume_stop_guests:
+            require(self.state.get("stage_in_progress") == "stop-guests" and
+                    self.state.get("next_stage") == "stop-guests",
+                    "journal is not stopped in the interrupted stop-guests stage")
+            pending = self.state.get("pending")
+            pending_guest = next((guest for guest in self.guests() if pending and
+                                  guest["node"] == pending.get("host") and
+                                  self.guest_command(guest, "shutdown")[:3] ==
+                                  pending.get("argv", [])[:3]), None)
+            require(pending is None or (pending.get("action") == "command" and pending_guest),
+                    "pending journal action is not a guest shutdown")
+            self.runner.call(FIRST, "executor", operation=self.state["operation"])
+        else:
+            require(self.state.get("stage_in_progress") is None,
+                    "previous stage did not finish; use the recovery runbook")
+            require(self.state.get("next_stage") == stage_key,
+                    "maintenance stages must run in order; use the recovery runbook")
         self.state["stage_in_progress"] = stage_key
         self.journal("stage-started:" + stage_key)
         action()
@@ -623,6 +654,7 @@ def main():
                                              "install", "reboot", "restore", "recovery"))
     parser.add_argument("--host", choices=tuple(HOSTS))
     parser.add_argument("--live", action="store_true")
+    parser.add_argument("--resume-stop-guests", action="store_true")
     args = parser.parse_args()
     dry_run = not (args.live or os.environ.get("MAINTENANCE_LIVE", "").lower() == "true")
     controller = None
@@ -632,7 +664,8 @@ def main():
             options = {"dry_run": dry_run,
                        "confirmation": os.environ.get("MAINTENANCE_CONFIRMATION", ""),
                        "backup": os.environ.get("MAINTENANCE_BACKUP_ACK", "").lower() == "true",
-                       "audit": os.environ.get("MAINTENANCE_CLIENT_AUDIT_ACK", "").lower() == "true"}
+                       "audit": os.environ.get("MAINTENANCE_CLIENT_AUDIT_ACK", "").lower() == "true",
+                       "resume_stop_guests": args.resume_stop_guests}
             if args.stage:
                 controller.run_stage(args.stage, host=args.host, **options)
             elif args.mode == "recover" or os.environ.get("MAINTENANCE_RECOVERY", "").lower() == "true":
