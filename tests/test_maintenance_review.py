@@ -32,7 +32,9 @@ rbd: ceph-rbd
         def command(*args):
             if args[1] == "list-unit-files":
                 return "ceph-crash.service enabled\ncron.service enabled"
-            return "ceph-crash.service loaded active running\nceph-mds@pve-0.service loaded active running"
+            return ("ceph-crash.service loaded active running\n"
+                    "ceph-mds@pve-0.service loaded active running\n"
+                    "ceph-mgr@pve-0.service loaded inactive dead")
 
         def status(args, **_):
             return SimpleNamespace(stdout="enabled\n" if args[1] == "is-enabled" else "active\n")
@@ -43,6 +45,7 @@ rbd: ceph-rbd
             found = maintenance_host.units()
         self.assertNotIn("ceph-crash.service", found)
         self.assertEqual(found["ceph-mds@pve-0.service"], {"enabled": "enabled", "active": "active"})
+        self.assertNotIn("ceph-mgr@pve-0.service", found)
 
 
 class ControllerReviewTests(unittest.TestCase):
