@@ -1,6 +1,6 @@
 id: stack_maintenance
 namespace: homelab.ops
-description: Routine Proxmox host maintenance. Kestra shows each maintenance stage as a separate task. Simulates and pins safe package upgrades (no removals, no major version changes), gracefully stops all guests, sets Ceph noout, upgrades packages, reboots each host with quorum/boot verification, then restores Ceph, guests, onboot flags, and schedulers. The infra-cluster (running Kestra) stays up. Dry-run (inspection only) by default; a live run requires the exact confirmation phrase plus backup and external-client acknowledgements. Interrupted maintenance recovery runs in stack_maintenance_recovery.
+description: Routine Proxmox host maintenance. Kestra shows each maintenance stage as a separate task. Simulates and pins safe package upgrades (no removals, no major version changes), gracefully stops all guests, sets Ceph noout, upgrades packages, reboots each host with quorum/boot verification, then restores Ceph, guests, onboot flags, and schedulers. The infra-cluster (running Kestra) stays up. Dry-run (inspection only) by default; a live run requires the exact confirmation phrase plus backup and external-client acknowledgements. Use continue_interrupted_guest_shutdown only after a terminal run failed in stop-guests and the executor lock has been cleared. Other interrupted stages require stack_maintenance_recovery.
 
 inputs:
   - id: live
@@ -19,10 +19,25 @@ inputs:
     type: BOOL
     defaults: false
     description: Confirm Ceph clients outside this inventory (e.g. Kubernetes CSI) are stopped or acceptable to disrupt.
+  - id: continue_interrupted_guest_shutdown
+    type: BOOL
+    defaults: false
+    description: Continue only an interrupted stop-guests stage after confirming the earlier execution is terminal and its executor lock has been cleared.
 
 tasks:
+  - id: validate_continuation_inputs
+    type: io.kestra.plugin.scripts.shell.Commands
+    containerImage: alpine:3.20
+    commands:
+      - |
+        if [ "{{ inputs.continue_interrupted_guest_shutdown }}" = "true" ] && [ "{{ inputs.live }}" != "true" ]; then
+          echo "Continuing an interrupted shutdown requires live=true." >&2
+          exit 1
+        fi
+
   - id: inspect_and_lock
     type: io.kestra.plugin.scripts.shell.Commands
+    runIf: "{{ not inputs.continue_interrupted_guest_shutdown }}"
     containerImage: python:3.12-alpine
     beforeCommands:
       - apk add --no-cache openssh-client
@@ -49,7 +64,7 @@ tasks:
 
   - id: prepare_hosts_and_packages
     type: io.kestra.plugin.scripts.shell.Commands
-    runIf: "{{ inputs.live }}"
+    runIf: "{{ inputs.live and not inputs.continue_interrupted_guest_shutdown }}"
     containerImage: python:3.12-alpine
     beforeCommands:
       - apk add --no-cache openssh-client
@@ -93,7 +108,12 @@ tasks:
     outputFiles:
       - maintenance-state.json
     commands:
-      - python3 maintenance.py --stage stop-guests --live
+      - |
+        if [ "{{ inputs.continue_interrupted_guest_shutdown }}" = "true" ]; then
+          python3 maintenance.py --stage stop-guests --live --resume-stop-guests
+        else
+          python3 maintenance.py --stage stop-guests --live
+        fi
 
   - id: stop_ceph_daemons
     type: io.kestra.plugin.scripts.shell.Commands
