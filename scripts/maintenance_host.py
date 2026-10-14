@@ -75,10 +75,14 @@ def units():
     # ceph-crash.service are out of scope.
     for line in run("systemctl", "list-units", "--all", "--plain", "--no-legend",
                     "--no-pager", "ceph-*.service").splitlines():
-        name = line.split()[0]
+        fields = line.split()
+        name = fields[0]
         if not re.fullmatch(r"ceph-(?:mon|mgr|osd|mds)@[^.][^/]*\.service", name):
             continue
         if name in result:
+            continue
+        # Ignore inactive placeholders; Ceph metadata below identifies real daemons.
+        if fields[2:4] == ["inactive", "dead"]:
             continue
         state = subprocess.run(["systemctl", "is-enabled", name],
                                text=True, capture_output=True, timeout=30).stdout.strip()
