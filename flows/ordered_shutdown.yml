@@ -4,10 +4,10 @@ description: Ordered homelab shutdown for recabling.
 
 inputs:
   - id: dry_run
-    type: BOOLEAN
+    type: BOOL
     defaults: true
   - id: require_ceph_healthy
-    type: BOOLEAN
+    type: BOOL
     defaults: true
 
 tasks:

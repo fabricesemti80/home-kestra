@@ -4,7 +4,7 @@ description: Ordered homelab restart after recabling.
 
 inputs:
   - id: dry_run
-    type: BOOLEAN
+    type: BOOL
     defaults: true
   - id: wait_minutes
     type: INT
