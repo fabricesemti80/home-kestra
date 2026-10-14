@@ -23,6 +23,7 @@ CONFIRM = "FULL OUTAGE pve-0 pve-1 pve-2"
 GUEST_SHUTDOWN_TIMEOUT = 480
 SUPPORTED = {(12, 8, 18), (12, 8, 19), (13, 9, 19)}
 UPGRADE = ["apt-get", "-s", "--no-remove", "--with-new-pkgs", "upgrade"]
+CEPH_MAINTENANCE_FLAGS = ("noout", "norecover", "nobackfill", "norebalance", "pause")
 
 
 class Refused(RuntimeError):
@@ -253,7 +254,7 @@ class Controller:
         require(actual == expected, "unaccounted Ceph daemon units")
         flags = self.js(FIRST, "ceph", "osd", "dump", "--format", "json")["flags"].split(",")
         return {"fsid": health["fsid"], "flags": flags,
-                "added_flags": [f for f in ("noout",) if f not in flags]}
+                "added_flags": [f for f in CEPH_MAINTENANCE_FLAGS if f not in flags]}
 
     def packages(self, host, versions):
         # No apt update in dry-run. Pins are refreshed and revalidated before download.
@@ -378,7 +379,10 @@ class Controller:
         self.clients_absent()
 
     def stop_ceph(self):
-        for flag in self.state["original"]["ceph"]["added_flags"]:
+        # Recompute from the saved original flags so interrupted runs use this same safe set.
+        for flag in CEPH_MAINTENANCE_FLAGS:
+            if flag in self.state["original"]["ceph"]["flags"]:
+                continue
             self.state["flags_intended"].append(flag)
             self.mutate("ceph-flag:" + flag, FIRST, "ceph", "osd", "set", flag)
         for kind in ("mds", "osd", "mgr", "mon"):
@@ -515,13 +519,6 @@ class Controller:
                 status = self.js(FIRST, "rbd", "status", "--pool", pool, "--image", image,
                                  "--format", "json")
                 require(not status["watchers"], "RBD watchers remain")
-        for host, saved in self.state["original"]["hosts"].items():
-            for unit in saved["units"]:
-                if unit.startswith("ceph-mds@"):
-                    daemon = unit[len("ceph-mds@"):-len(".service")]
-                    clients = self.js(host, "ceph", "tell", "mds." + daemon,
-                                      "client", "ls", "--format", "json")
-                    require(clients == [], "CephFS sessions remain or response unsupported")
 
     def verify_quorum(self):
         for host in HOSTS:

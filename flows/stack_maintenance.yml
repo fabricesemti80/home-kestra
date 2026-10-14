@@ -1,6 +1,6 @@
 id: stack_maintenance
 namespace: homelab.ops
-description: Routine Proxmox host maintenance. Kestra shows each maintenance stage as a separate task. Simulates and pins safe package upgrades (no removals, no major version changes), gracefully stops all guests, sets Ceph noout, upgrades packages, reboots each host with quorum/boot verification, then restores Ceph, guests, onboot flags, and schedulers. The infra-cluster (running Kestra) stays up. Dry-run (inspection only) by default; a live run requires the exact confirmation phrase plus backup and external-client acknowledgements. Use continue_interrupted_guest_shutdown only after a terminal run failed in stop-guests and the executor lock has been cleared. Other interrupted stages require stack_maintenance_recovery.
+description: Routine Proxmox host maintenance. Kestra shows each maintenance stage as a separate task. Simulates and pins safe package upgrades (no removals, no major version changes), gracefully stops all guests, sets Ceph maintenance flags, upgrades packages, reboots each host with quorum/boot verification, then restores Ceph, guests, onboot flags, and schedulers. The infra-cluster (running Kestra) stays up. Dry-run (inspection only) by default; a live run requires the exact confirmation phrase plus backup and external-client acknowledgements. Use continue_interrupted_guest_shutdown only after a terminal run failed in stop-guests and the executor lock has been cleared. Other interrupted stages require stack_maintenance_recovery.
 
 inputs:
   - id: live
