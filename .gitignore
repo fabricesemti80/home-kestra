@@ -9,3 +9,7 @@
 .env.*.local
 ansible/**/secrets.yml
 ansible/**/secrets.vault
+
+# Local maintenance dry-run artifacts
+maintenance-state.json
+__pycache__/

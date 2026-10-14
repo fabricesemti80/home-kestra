@@ -1,17 +1,17 @@
-id: recabling_shutdown
+id: stack_startup
 namespace: homelab.ops
-description: Stop selected app and service guests, set Ceph maintenance flags, and power off Proxmox hosts for recabling.
+description: Ordered full-stack startup after manual Proxmox host power-on. Waits for all three hosts, starts Ceph and clears maintenance flags, then starts the PBS LXC, service VMs, and app-cluster VMs. Kubernetes readiness is not verified; check the app-cluster separately after the run. Dry-run by default.
 
 inputs:
   - id: dry_run
     type: BOOL
     defaults: true
-  - id: require_ceph_healthy
-    type: BOOL
-    defaults: true
+  - id: wait_minutes
+    type: INT
+    defaults: 20
 
 tasks:
-  - id: preflight
+  - id: wait_for_hosts
     type: io.kestra.plugin.scripts.shell.Commands
     containerImage: alpine:3.20
     beforeCommands:
@@ -19,16 +19,16 @@ tasks:
     namespaceFiles:
       enabled: true
       include:
-        - ordered-shutdown.sh
+        - stack-startup.sh
     taskRunner:
       type: io.kestra.plugin.scripts.runner.docker.Docker
     env:
       HOMELAB_SSH_PRIVATE_KEY: "{{ secret('HOMELAB_SSH_PRIVATE_KEY') }}"
       HOMELAB_SSH_KNOWN_HOSTS: "{{ secret('HOMELAB_SSH_KNOWN_HOSTS') }}"
     commands:
-      - bash ordered-shutdown.sh "{{ inputs.dry_run }}" "{{ inputs.require_ceph_healthy }}" preflight
+      - bash stack-startup.sh "{{ inputs.dry_run }}" "{{ inputs.wait_minutes }}" wait_hosts
 
-  - id: stop_kubernetes_vms
+  - id: wait_for_ceph
     type: io.kestra.plugin.scripts.shell.Commands
     containerImage: alpine:3.20
     beforeCommands:
@@ -36,16 +36,16 @@ tasks:
     namespaceFiles:
       enabled: true
       include:
-        - ordered-shutdown.sh
+        - stack-startup.sh
     taskRunner:
       type: io.kestra.plugin.scripts.runner.docker.Docker
     env:
       HOMELAB_SSH_PRIVATE_KEY: "{{ secret('HOMELAB_SSH_PRIVATE_KEY') }}"
       HOMELAB_SSH_KNOWN_HOSTS: "{{ secret('HOMELAB_SSH_KNOWN_HOSTS') }}"
     commands:
-      - bash ordered-shutdown.sh "{{ inputs.dry_run }}" "{{ inputs.require_ceph_healthy }}" stop_k8s
+      - bash stack-startup.sh "{{ inputs.dry_run }}" "{{ inputs.wait_minutes }}" wait_ceph
 
-  - id: stop_service_guests
+  - id: start_infra_guests
     type: io.kestra.plugin.scripts.shell.Commands
     containerImage: alpine:3.20
     beforeCommands:
@@ -53,16 +53,16 @@ tasks:
     namespaceFiles:
       enabled: true
       include:
-        - ordered-shutdown.sh
+        - stack-startup.sh
     taskRunner:
       type: io.kestra.plugin.scripts.runner.docker.Docker
     env:
       HOMELAB_SSH_PRIVATE_KEY: "{{ secret('HOMELAB_SSH_PRIVATE_KEY') }}"
       HOMELAB_SSH_KNOWN_HOSTS: "{{ secret('HOMELAB_SSH_KNOWN_HOSTS') }}"
     commands:
-      - bash ordered-shutdown.sh "{{ inputs.dry_run }}" "{{ inputs.require_ceph_healthy }}" stop_services
+      - bash stack-startup.sh "{{ inputs.dry_run }}" "{{ inputs.wait_minutes }}" start_infra
 
-  - id: set_ceph_maintenance
+  - id: start_service_guests
     type: io.kestra.plugin.scripts.shell.Commands
     containerImage: alpine:3.20
     beforeCommands:
@@ -70,16 +70,16 @@ tasks:
     namespaceFiles:
       enabled: true
       include:
-        - ordered-shutdown.sh
+        - stack-startup.sh
     taskRunner:
       type: io.kestra.plugin.scripts.runner.docker.Docker
     env:
       HOMELAB_SSH_PRIVATE_KEY: "{{ secret('HOMELAB_SSH_PRIVATE_KEY') }}"
       HOMELAB_SSH_KNOWN_HOSTS: "{{ secret('HOMELAB_SSH_KNOWN_HOSTS') }}"
     commands:
-      - bash ordered-shutdown.sh "{{ inputs.dry_run }}" "{{ inputs.require_ceph_healthy }}" set_ceph_maintenance
+      - bash stack-startup.sh "{{ inputs.dry_run }}" "{{ inputs.wait_minutes }}" start_services
 
-  - id: poweroff_proxmox_hosts
+  - id: start_kubernetes_vms
     type: io.kestra.plugin.scripts.shell.Commands
     containerImage: alpine:3.20
     beforeCommands:
@@ -87,11 +87,11 @@ tasks:
     namespaceFiles:
       enabled: true
       include:
-        - ordered-shutdown.sh
+        - stack-startup.sh
     taskRunner:
       type: io.kestra.plugin.scripts.runner.docker.Docker
     env:
       HOMELAB_SSH_PRIVATE_KEY: "{{ secret('HOMELAB_SSH_PRIVATE_KEY') }}"
       HOMELAB_SSH_KNOWN_HOSTS: "{{ secret('HOMELAB_SSH_KNOWN_HOSTS') }}"
     commands:
-      - bash ordered-shutdown.sh "{{ inputs.dry_run }}" "{{ inputs.require_ceph_healthy }}" poweroff_hosts
+      - bash stack-startup.sh "{{ inputs.dry_run }}" "{{ inputs.wait_minutes }}" start_k8s

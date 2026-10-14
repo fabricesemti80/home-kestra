@@ -17,7 +17,8 @@ import uuid
 HOSTS = {"pve-0": "10.0.40.10", "pve-1": "10.0.40.11", "pve-2": "10.0.40.12"}
 FIRST = "pve-0"
 APP = {4090, 4091, 4092}
-SERVICES = {3050, 3051}
+PBS = {4016}
+SERVICES = {3050, 3051, 4052}
 CONFIRM = "FULL OUTAGE pve-0 pve-1 pve-2"
 SUPPORTED = {(12, 8, 18), (12, 8, 19), (13, 9, 19)}
 UPGRADE = ["apt-get", "-s", "--no-remove", "--with-new-pkgs", "upgrade"]
@@ -40,6 +41,12 @@ def major(version):
 
 def digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
+
+
+def guest_restore_order(guest):
+    guest_id = guest["id"]
+    return (0 if guest_id in PBS else 1 if guest_id in SERVICES
+            else 3 if guest_id in APP else 2, guest_id)
 
 
 class SSH(AbstractContextManager):
@@ -146,8 +153,22 @@ class Controller:
             versions.add(version)
             self.quorum(host["cluster"])
             require(not host["ha"], "HA resources unsupported; no HA/watchdog manipulation")
-            require(not host["mounts"] and not host["rbd_devices"],
-                    "host Ceph mounts or mapped RBD clients unsupported")
+            # CephFS mounts must match a configured PVE CephFS storage path.
+            for mount in host["mounts"].get("filesystems", []):
+                target = mount.get("target", "")
+                require(mount.get("fstype") in {"ceph", "fuse.ceph"}
+                        and target in host["cephfs_storage_paths"],
+                        "host Ceph mount is not configured PVE CephFS storage: " + target)
+            # RBD mappings are allowed only for the node's own running QEMU guests.
+            guests = {g["id"]: g for g in host["guests"]}
+            for device in host["rbd_devices"]:
+                require(not device.get("namespace"), "RBD namespace mapping unsupported")
+                match = re.fullmatch(r"vm-(\d+)-(?:disk-\d+|cloudinit)", device.get("name", ""))
+                require(match, "unrecognized RBD mapping: " + device.get("name", ""))
+                guest = guests.get(int(match[1]))
+                require(guest is not None and guest["kind"] == "qemu"
+                        and guest["status"] == "running",
+                        "RBD mapping not owned by a running guest: " + device["name"])
             require(not host["policy_exists"], "existing policy-rc.d unsupported")
             require(not host["active"] or recovery, "incomplete/overlapping operation blocks new run")
             require(host["state_fstype"] in {"ext4", "xfs", "zfs", "btrfs"},
@@ -184,15 +205,27 @@ class Controller:
         health = self.js(FIRST, "ceph", "status", "--format", "json")
         require(health["health"]["status"] == "HEALTH_OK", "Ceph must initially be HEALTH_OK")
         require(health.get("pgmap", {}).get("num_pgs", 0) > 0, "Ceph has no verified PGs")
-        require(not self.js(FIRST, "ceph", "orch", "ps", "--format", "json")
-                if self.cmd(FIRST, "ceph", "mgr", "module", "ls", "--format", "json").find(
-                    '"cephadm"') >= 0 else True, "cephadm daemons unsupported")
+        modules = self.js(FIRST, "ceph", "mgr", "module", "ls", "--format", "json")
+        if "cephadm" in modules["enabled_modules"]:
+            require(not self.js(FIRST, "ceph", "orch", "ps", "--format", "json"),
+                    "cephadm daemons unsupported")
         mons = self.js(FIRST, "ceph", "mon", "dump", "--format", "json")["mons"]
         require({m["name"] for m in mons} == set(HOSTS), "monitor membership mismatch")
+        mon_ips = set()
         for mon in mons:
             addresses = mon.get("public_addrs", {}).get("addrvec", [])
-            require(addresses and all(a["addr"].split(":")[0] == HOSTS[mon["name"]]
-                                      for a in addresses), "monitor address mismatch")
+            require(addresses, "monitor without addrvec: " + mon["name"])
+            for a in addresses:
+                mon_ips.add(a["addr"].split(":")[0])
+        for host in snapshots.values():
+            for mount in host["mounts"].get("filesystems", []):
+                source_ips = set(re.findall(r"(?:\d{1,3}\.){3}\d{1,3}",
+                                            mount.get("source", "")))
+                require(source_ips and source_ips <= mon_ips,
+                        "Ceph mount source does not match this cluster's monitors")
+        # Monitors may listen on a dedicated cluster network; require one /24 only.
+        require(len({ip.rsplit(".", 1)[0] for ip in mon_ips}) == 1,
+                "monitors span multiple networks")
         osds = self.js(FIRST, "ceph", "osd", "metadata", "--format", "json")
         mgrs = self.js(FIRST, "ceph", "mgr", "metadata", "--format", "json")
         mdss = self.js(FIRST, "ceph", "mds", "metadata", "--format", "json")
@@ -226,9 +259,14 @@ class Controller:
             require(re.fullmatch(r"[A-Za-z0-9.+:~_-]+", version), "unsafe package version")
             packages[package] = version
             if package in versions:
-                require(major(version) == major(versions[package]), "major upgrade forbidden")
-            if package.startswith(("ceph", "librados", "librbd")):
-                require(major(version) == major(versions["ceph-common"]), "Ceph major drift")
+                require(major(version) == major(versions[package]),
+                        f"major upgrade forbidden on {host}: {package} "
+                        f"{versions[package]} -> {version}")
+            if (package.startswith(("ceph", "librados", "librbd"))
+                    and not package.endswith("-perl")):  # Perl bindings version independently
+                require(major(version) == major(versions["ceph-common"]),
+                        f"Ceph major drift on {host}: {package} {version} "
+                        f"vs ceph-common {versions['ceph-common']}")
         require("proxmox-ve" not in text or "Remv proxmox-ve" not in text,
                 "proxmox-ve must remain installed")
         return packages
@@ -239,11 +277,11 @@ class Controller:
         ceph = self.ceph_inventory(snapshots)
         packages = {h: self.packages(h, snapshots[h]["versions"]) for h in HOSTS}
         original = {"hosts": snapshots, "ceph": ceph}
-        self.state = {"schema": 1, "operation": str(uuid.uuid4()), "sequence": 0,
+        self.state = {"schema": 2, "operation": str(uuid.uuid4()), "sequence": 0,
                       "phase": "planned", "pending": None, "original": original,
                       "original_digest": digest(original), "packages": packages,
                       "masks": {h: [] for h in HOSTS}, "policies": [],
-                      "rebooted": [], "flags_intended": []}
+                      "rebooted": [], "flags_intended": [], "packages_touched": []}
         self.artifact()
         return snapshots
 
@@ -281,7 +319,7 @@ class Controller:
         for pool in pools:
             apps = self.js(FIRST, "ceph", "osd", "pool", "application", "get", pool,
                            "--format", "json")
-            require(set(apps) <= {"rbd", "cephfs"}, "unsupported Ceph pool application")
+            require(set(apps) <= {"rbd", "cephfs", "mgr"}, "unsupported Ceph pool application")
             if "rbd" not in apps:
                 continue
             require(not self.js(FIRST, "rbd", "namespace", "list", "--pool", pool,
@@ -312,7 +350,8 @@ class Controller:
         require(self.cmd(host, "hostname", "-s") == host, "reboot identity mismatch")
         self.wait("PVE quorum after " + host, self.verify_quorum)
         for unit in self.state["masks"][host]:
-            require(self.cmd(host, "systemctl", "is-enabled", unit) == "masked",
+            require(self.cmd(host, "systemctl", "show", "--property=UnitFileState",
+                             "--value", unit) == "masked",
                     "persistent mask lost after reboot")
         self.state["rebooted"].append(host)
         self.journal("reboot-verified:" + host)
@@ -374,10 +413,18 @@ class Controller:
                     self.state["packages"][host], "simulated package manifest drift")
             pins = [f"{p}={v}" for p, v in sorted(self.state["packages"][host].items())]
             if pins:
+                self.state["packages_touched"].append(host)
+                self.journal("install-packages-intent:" + host)
                 self.mutate("install-packages", host, "env", "DEBIAN_FRONTEND=noninteractive",
                             "NEEDRESTART_MODE=l", "apt-get", "--assume-yes", "--no-remove",
                             "--no-download", "-o", "Dpkg::Options::=--force-confold", "install", *pins)
-            self.verify_packages(host)
+            if host in self.state["packages_touched"]:
+                self.verify_packages(host)
+            else:
+                require(not self.cmd(host, "dpkg", "--audit"), "dpkg needs manual repair")
+                for package, version in self.state["original"]["hosts"][host]["versions"].items():
+                    require(self.cmd(host, "dpkg-query", "-W", "-f=${Version}", package) == version,
+                            "original package state changed before installation")
         for host in HOSTS:
             self.reboot(host)
         self.restore()
@@ -394,7 +441,13 @@ class Controller:
     def restore(self):
         self.verify_quorum()
         for host in HOSTS:
-            self.verify_packages(host)
+            if host in self.state["packages_touched"]:
+                self.verify_packages(host)
+            else:
+                require(not self.cmd(host, "dpkg", "--audit"), "dpkg needs manual repair")
+                for package, version in self.state["original"]["hosts"][host]["versions"].items():
+                    require(self.cmd(host, "dpkg-query", "-W", "-f=${Version}", package) == version,
+                            "original package state changed before installation")
         # Only recorded units are touched, only our masks removed. Original enabled bits untouched.
         for kind in ("mon", "mgr", "osd", "mds"):
             for host, saved in self.state["original"]["hosts"].items():
@@ -416,8 +469,7 @@ class Controller:
             self.mutate("clear-own-flag:" + flag, FIRST, "ceph", "osd", "unset", flag)
         self.wait("Ceph HEALTH_OK", lambda: self.js(
             FIRST, "ceph", "status", "--format", "json")["health"]["status"] == "HEALTH_OK")
-        for guest in sorted(self.guests(), key=lambda g: (
-                0 if g["id"] in SERVICES else 2 if g["id"] in APP else 1, g["id"])):
+        for guest in sorted(self.guests(), key=guest_restore_order):
             status = self.guest_status(guest)
             if guest["status"] == "running" and status == "stopped":
                 self.mutate("restore-running-guest", guest["node"], *self.guest_command(guest, "start"))
@@ -447,7 +499,7 @@ class Controller:
         states = [self.runner.call(h, "load") for h in HOSTS]
         require(all(s == states[0] for s in states), "divergent journals; manual reconciliation required")
         self.state = states[0]
-        require(self.state.get("schema") == 1 and
+        require(self.state.get("schema") == 2 and
                 self.state.get("original_digest") == digest(self.state.get("original")),
                 "invalid recovery snapshot")
         require(re.fullmatch(r"[a-f0-9-]{36}", self.state.get("operation", "")),
@@ -472,11 +524,12 @@ def main():
     parser.add_argument("--mode", choices=("maintain", "recover"), default="maintain")
     parser.add_argument("--live", action="store_true")
     args = parser.parse_args()
+    dry_run = not (args.live or os.environ.get("MAINTENANCE_LIVE", "").lower() == "true")
     controller = None
     try:
         with SSH() as runner:
             controller = Controller(runner)
-            options = {"dry_run": not (args.live or os.environ.get("MAINTENANCE_LIVE", "").lower() == "true"),
+            options = {"dry_run": dry_run,
                        "confirmation": os.environ.get("MAINTENANCE_CONFIRMATION", ""),
                        "backup": os.environ.get("MAINTENANCE_BACKUP_ACK", "").lower() == "true",
                        "audit": os.environ.get("MAINTENANCE_CLIENT_AUDIT_ACK", "").lower() == "true"}
@@ -487,8 +540,10 @@ def main():
     except Exception as exc:
         # Never dump subprocess args/env, remote output or credentials.
         phase = controller.state["phase"] if controller and controller.state else "preflight"
+        detail = "No host changes were made." if dry_run else (
+            "Locks/state retained; use operator recovery runbook.")
         print(f"FAILED at {phase}: {exc if isinstance(exc, Refused) else type(exc).__name__}. "
-              "Locks/state retained; use operator recovery runbook.", file=sys.stderr)
+              + detail, file=sys.stderr)
         return 1
     return 0
 

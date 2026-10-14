@@ -63,18 +63,43 @@ def units():
         name, state, *_ = line.split()
         if (name.endswith(".timer") or name in ("cron.service", "pve-guests.service")
                 or re.fullmatch(r"ceph-(?:mon|mgr|osd|mds)@[^.][^/]*\.service", name)):
-            if "@" in name and name.split("@")[1] == ".service":
+            if "@" in name and name.startswith(name.split("@")[0] + "@."):
+                # Uninstantiated template (e.g. zfs-scrub-@.timer): nothing to manage.
                 continue
             active = subprocess.run(["systemctl", "is-active", name],
                                     text=True, capture_output=True, timeout=30).stdout.strip()
             result[name] = {"enabled": state, "active": active}
-    # Instances may be enabled via target wants but absent from list-unit-files.
+    # Instances may be enabled via target wants but absent from list-unit-files
+    # (e.g. ceph-mds@<host>). Probe their state directly instead of failing.
+    # Only templated daemon instances are managed; non-templated units such as
+    # ceph-crash.service are out of scope.
     for line in run("systemctl", "list-units", "--all", "--plain", "--no-legend",
                     "--no-pager", "ceph-*.service").splitlines():
         name = line.split()[0]
-        if name not in result:
-            raise ValueError("Ceph instance missing from unit-file inventory: " + name)
+        if not re.fullmatch(r"ceph-(?:mon|mgr|osd|mds)@[^.][^/]*\.service", name):
+            continue
+        if name in result:
+            continue
+        state = subprocess.run(["systemctl", "is-enabled", name],
+                               text=True, capture_output=True, timeout=30).stdout.strip()
+        if state not in {"enabled", "disabled", "static", "masked"}:
+            # "indirect" etc.: effectively enabled via target wants.
+            state = "enabled"
+        active = subprocess.run(["systemctl", "is-active", name],
+                                text=True, capture_output=True, timeout=30).stdout.strip()
+        result[name] = {"enabled": state, "active": active}
     return result
+
+
+def cephfs_paths(config):
+    paths = set()
+    storage_type = None
+    for line in config.splitlines():
+        if line and not line[0].isspace() and ":" in line:
+            storage_type = line.split(":", 1)[0]
+        elif storage_type == "cephfs" and line.strip().startswith("path "):
+            paths.add(line.split(None, 1)[1].strip())
+    return paths
 
 
 def inventory():
@@ -106,9 +131,12 @@ def inventory():
             "os": os_release.get("ID"), "os_version": os_release.get("VERSION_ID"),
             "versions": versions, "guests": guests, "units": units(),
             "policy_exists": POLICY.exists() or POLICY.is_symlink(),
-            "mounts": js("findmnt", "--json", "-t", "ceph,fuse.ceph,rbd")
+            "mounts": js("findmnt", "--json", "-o", "TARGET,SOURCE,FSTYPE",
+                         "-t", "ceph,fuse.ceph,rbd")
             if subprocess.run(["findmnt", "-rn", "-t", "ceph,fuse.ceph,rbd"],
                               capture_output=True, timeout=30).returncode == 0 else {},
+            "cephfs_storage_paths": sorted(cephfs_paths(
+                Path("/etc/pve/storage.cfg").read_text())),
             "rbd_devices": js("rbd", "device", "list", "--format", "json"),
             "state_fstype": run("findmnt", "-n", "-o", "FSTYPE", "-T", "/var/lib"),
             "root": os.geteuid() == 0,
