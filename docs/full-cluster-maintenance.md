@@ -1,6 +1,6 @@
 # Full cluster maintenance
 
-The `full_cluster_maintenance` Kestra flow runs from the physical infra cluster. It targets the three Proxmox hosts and their Ceph daemons and guests. It is manual and defaults to inspection only. It does not patch Talos, infra-cluster nodes, or Kubernetes workloads.
+The `stack_maintenance` Kestra flow runs from the physical infra cluster. It targets the three Proxmox hosts and their Ceph daemons and guests. It is manual and defaults to inspection only. It does not patch Talos, infra-cluster nodes, or Kubernetes workloads.
 
 ## Before a live run
 
@@ -27,4 +27,4 @@ After either path, verify Proxmox quorum and Ceph `HEALTH_OK`, then check each g
 
 ## Flow names and migration
 
-The source names are `recabling_shutdown`, `recabling_startup`, and `full_cluster_maintenance`. The recabling flows act on a selected guest list; the maintenance flow inventories every guest. The Git sync flow has `delete: false`, so renaming the two older flow IDs does not remove `ordered_shutdown` or `ordered_restart` from a live Kestra instance. After syncing and validating the renamed flows, explicitly retire the two old IDs. Do not change Git sync to bulk deletion: it could remove manually managed flows in the namespace.
+The source names are `stack_shutdown`, `stack_startup`, and `stack_maintenance`. The shutdown/startup flows act on an explicit guest list (app-cluster VMs, service VMs, PBS LXC); the maintenance flow inventories every guest. The Git sync flow has `delete: false`, so retired flow IDs (`ordered_shutdown`, `ordered_restart`, `recabling_shutdown`, `recabling_startup`, `full_cluster_maintenance`) are not removed from a live Kestra instance automatically. After syncing and validating the new flows, explicitly retire the old IDs. Do not change Git sync to bulk deletion: it could remove manually managed flows in the namespace.

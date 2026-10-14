@@ -1,6 +1,12 @@
+<<<<<<<< HEAD:flows/recabling_startup.yml
 id: recabling_startup
 namespace: homelab.ops
 description: Restore Ceph and selected service and app guests after Proxmox hosts start following recabling.
+========
+id: stack_startup
+namespace: homelab.ops
+description: Ordered full-stack startup after manual Proxmox host power-on. Waits for all three hosts, starts Ceph and clears maintenance flags, then starts the PBS LXC, service VMs, and app-cluster VMs. Kubernetes readiness is not verified; check the app-cluster separately after the run. Dry-run by default.
+>>>>>>>> 346c632 (feat: replace flows with stack_shutdown/startup/maintenance):flows/stack_startup.yml
 
 inputs:
   - id: dry_run
@@ -11,7 +17,7 @@ inputs:
     defaults: 20
 
 tasks:
-  - id: wait_for_proxmox_hosts
+  - id: wait_for_hosts
     type: io.kestra.plugin.scripts.shell.Commands
     containerImage: alpine:3.20
     beforeCommands:
@@ -19,16 +25,16 @@ tasks:
     namespaceFiles:
       enabled: true
       include:
-        - ordered-restart.sh
+        - stack-startup.sh
     taskRunner:
       type: io.kestra.plugin.scripts.runner.docker.Docker
     env:
       HOMELAB_SSH_PRIVATE_KEY: "{{ secret('HOMELAB_SSH_PRIVATE_KEY') }}"
       HOMELAB_SSH_KNOWN_HOSTS: "{{ secret('HOMELAB_SSH_KNOWN_HOSTS') }}"
     commands:
-      - bash ordered-restart.sh "{{ inputs.dry_run }}" "{{ inputs.wait_minutes }}" wait_hosts
+      - bash stack-startup.sh "{{ inputs.dry_run }}" "{{ inputs.wait_minutes }}" wait_hosts
 
-  - id: wait_for_ceph_health
+  - id: wait_for_ceph
     type: io.kestra.plugin.scripts.shell.Commands
     containerImage: alpine:3.20
     beforeCommands:
@@ -36,16 +42,16 @@ tasks:
     namespaceFiles:
       enabled: true
       include:
-        - ordered-restart.sh
+        - stack-startup.sh
     taskRunner:
       type: io.kestra.plugin.scripts.runner.docker.Docker
     env:
       HOMELAB_SSH_PRIVATE_KEY: "{{ secret('HOMELAB_SSH_PRIVATE_KEY') }}"
       HOMELAB_SSH_KNOWN_HOSTS: "{{ secret('HOMELAB_SSH_KNOWN_HOSTS') }}"
     commands:
-      - bash ordered-restart.sh "{{ inputs.dry_run }}" "{{ inputs.wait_minutes }}" wait_ceph
+      - bash stack-startup.sh "{{ inputs.dry_run }}" "{{ inputs.wait_minutes }}" wait_ceph
 
-  - id: clear_ceph_maintenance
+  - id: start_infra_guests
     type: io.kestra.plugin.scripts.shell.Commands
     containerImage: alpine:3.20
     beforeCommands:
@@ -53,14 +59,14 @@ tasks:
     namespaceFiles:
       enabled: true
       include:
-        - ordered-restart.sh
+        - stack-startup.sh
     taskRunner:
       type: io.kestra.plugin.scripts.runner.docker.Docker
     env:
       HOMELAB_SSH_PRIVATE_KEY: "{{ secret('HOMELAB_SSH_PRIVATE_KEY') }}"
       HOMELAB_SSH_KNOWN_HOSTS: "{{ secret('HOMELAB_SSH_KNOWN_HOSTS') }}"
     commands:
-      - bash ordered-restart.sh "{{ inputs.dry_run }}" "{{ inputs.wait_minutes }}" clear_ceph_maintenance
+      - bash stack-startup.sh "{{ inputs.dry_run }}" "{{ inputs.wait_minutes }}" start_infra
 
   - id: start_service_guests
     type: io.kestra.plugin.scripts.shell.Commands
@@ -70,14 +76,14 @@ tasks:
     namespaceFiles:
       enabled: true
       include:
-        - ordered-restart.sh
+        - stack-startup.sh
     taskRunner:
       type: io.kestra.plugin.scripts.runner.docker.Docker
     env:
       HOMELAB_SSH_PRIVATE_KEY: "{{ secret('HOMELAB_SSH_PRIVATE_KEY') }}"
       HOMELAB_SSH_KNOWN_HOSTS: "{{ secret('HOMELAB_SSH_KNOWN_HOSTS') }}"
     commands:
-      - bash ordered-restart.sh "{{ inputs.dry_run }}" "{{ inputs.wait_minutes }}" start_services
+      - bash stack-startup.sh "{{ inputs.dry_run }}" "{{ inputs.wait_minutes }}" start_services
 
   - id: start_kubernetes_vms
     type: io.kestra.plugin.scripts.shell.Commands
@@ -87,11 +93,11 @@ tasks:
     namespaceFiles:
       enabled: true
       include:
-        - ordered-restart.sh
+        - stack-startup.sh
     taskRunner:
       type: io.kestra.plugin.scripts.runner.docker.Docker
     env:
       HOMELAB_SSH_PRIVATE_KEY: "{{ secret('HOMELAB_SSH_PRIVATE_KEY') }}"
       HOMELAB_SSH_KNOWN_HOSTS: "{{ secret('HOMELAB_SSH_KNOWN_HOSTS') }}"
     commands:
-      - bash ordered-restart.sh "{{ inputs.dry_run }}" "{{ inputs.wait_minutes }}" start_k8s
+      - bash stack-startup.sh "{{ inputs.dry_run }}" "{{ inputs.wait_minutes }}" start_k8s

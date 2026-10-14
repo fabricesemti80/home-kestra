@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Ordered full-stack shutdown: app-cluster VMs -> service VMs -> PBS LXC ->
+# Ceph maintenance flags -> Proxmox host poweroff.
+# Stage-based; each Kestra task invokes one stage. Dry-run by default.
 set -euo pipefail
 
 DRY_RUN="${1:-true}"
@@ -7,8 +10,9 @@ STAGE="${3:-preflight}"
 
 SSH_USER="${HOMELAB_SSH_USER:-root}"
 NODES=("10.0.40.10:pve-0" "10.0.40.11:pve-1" "10.0.40.12:pve-2")
-APP_VM_IDS=(4090 4091 4092)
-SERVICE_VM_IDS=(3050 3051)
+APP_VM_IDS=(4090 4091 4092)        # k8s-ctrl-01..03 (app-cluster)
+SERVICE_VM_IDS=(3050 3051 4052)    # hermes, coolify, ai
+INFRA_LXC_IDS=(4016)               # proxmox-pbs-0 (backup server)
 
 log() { printf '[%s] %s\n' "$STAGE" "$*"; }
 is_dry_run() { [[ "$DRY_RUN" == "true" || "$DRY_RUN" == "1" || "$DRY_RUN" == "yes" ]]; }
@@ -58,11 +62,15 @@ first_available_host() {
   return 1
 }
 
-vm_node() {
-  local vmid="$1"
-  local host node
+# Resolve a guest ID to "<node>:<kind>" where kind is qemu|lxc.
+guest_node() {
+  local id="$1"
+  local host
   host="$(first_available_host)"
-  ssh_cmd "$host" "for node in pve-0 pve-1 pve-2; do test -f /etc/pve/nodes/\$node/qemu-server/$vmid.conf && echo \$node && exit 0; done; exit 1"
+  ssh_cmd "$host" "for node in pve-0 pve-1 pve-2; do
+    test -f /etc/pve/nodes/\$node/qemu-server/$id.conf && { echo \"\$node:qemu\"; exit 0; }
+    test -f /etc/pve/nodes/\$node/lxc/$id.conf && { echo \"\$node:lxc\"; exit 0; }
+  done; exit 1"
 }
 
 node_ip() {
@@ -95,26 +103,34 @@ check_ceph_health() {
   fi
 }
 
-set_vm_onboot() {
+guest_tool() { [[ "$1" == qemu ]] && printf 'qm' || printf 'pct'; }
+
+set_guest_onboot() {
   local value="$1"
   shift
-  local vmid node host
-  for vmid in "$@"; do
-    node="$(vm_node "$vmid")"
+  local id loc node kind host tool
+  for id in "$@"; do
+    loc="$(guest_node "$id")"
+    node="${loc%%:*}"
+    kind="${loc##*:}"
     host="$(node_ip "$node")"
-    run_remote "$host" "qm set $vmid --onboot $value"
+    tool="$(guest_tool "$kind")"
+    run_remote "$host" "$tool set $id --onboot $value"
   done
 }
 
-stop_vms() {
-  local vmid node host status
-  for vmid in "$@"; do
-    node="$(vm_node "$vmid")"
+stop_guests() {
+  local id loc node kind host tool status
+  for id in "$@"; do
+    loc="$(guest_node "$id")"
+    node="${loc%%:*}"
+    kind="${loc##*:}"
     host="$(node_ip "$node")"
-    status="$(ssh_cmd "$host" "qm status $vmid | awk '{print \$2}'")"
-    log "vm $vmid on $node is $status"
+    tool="$(guest_tool "$kind")"
+    status="$(ssh_cmd "$host" "$tool status $id | awk '{print \$2}'")"
+    log "guest $id ($kind) on $node is $status"
     [[ "$status" == "running" ]] || continue
-    run_remote "$host" "qm shutdown $vmid --timeout 180 && test \"\$(qm status $vmid)\" = 'status: stopped'"
+    run_remote "$host" "$tool shutdown $id --timeout 180 || $tool stop $id"
   done
 }
 
@@ -139,20 +155,22 @@ setup_ssh
 case "$STAGE" in
   preflight)
     check_hosts
-    for vmid in "${APP_VM_IDS[@]}"; do log "vm $vmid located on $(vm_node "$vmid")"; done
+    for id in "${APP_VM_IDS[@]}" "${SERVICE_VM_IDS[@]}" "${INFRA_LXC_IDS[@]}"; do
+      log "guest $id located at $(guest_node "$id")"
+    done
     check_ceph_health
     ;;
   stop_k8s)
-    set_vm_onboot 0 "${APP_VM_IDS[@]}"
-    stop_vms "${APP_VM_IDS[@]}"
+    set_guest_onboot 0 "${APP_VM_IDS[@]}"
+    stop_guests "${APP_VM_IDS[@]}"
     ;;
   stop_services)
-    if ((${#SERVICE_VM_IDS[@]} == 0)); then
-      log "no service VMs configured"
-    else
-      set_vm_onboot 0 "${SERVICE_VM_IDS[@]}"
-      stop_vms "${SERVICE_VM_IDS[@]}"
-    fi
+    set_guest_onboot 0 "${SERVICE_VM_IDS[@]}"
+    stop_guests "${SERVICE_VM_IDS[@]}"
+    ;;
+  stop_infra)
+    set_guest_onboot 0 "${INFRA_LXC_IDS[@]}"
+    stop_guests "${INFRA_LXC_IDS[@]}"
     ;;
   set_ceph_maintenance)
     set_ceph_flags
